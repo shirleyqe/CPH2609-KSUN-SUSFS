@@ -221,7 +221,8 @@ jobs:
           export LLVM_IAS=1
           make -C "$KERNEL_DIR" O="$OUT_DIR" gki_defconfig
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
-            --enable KSU --enable KSU_SUSFS
+            --enable KSU --enable KSU_SUSFS \
+            --disable LTO_CLANG_FULL --enable LTO_CLANG_THIN
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
           make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
           test -s "$OUT_DIR/arch/arm64/boot/Image"
@@ -229,6 +230,7 @@ jobs:
           grep -q '^CONFIG_KSU_SUSFS=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS_SUS_PATH=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS_TRY_UMOUNT=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_LTO_CLANG_THIN=y$' "$OUT_DIR/.config"
           test -s "$OUT_DIR/vmlinux"
           test -s "$OUT_DIR/System.map"
           strings "$OUT_DIR/vmlinux" > "$RUNNER_TEMP/vmlinux.strings"
@@ -242,6 +244,7 @@ jobs:
             sha256sum "$OUT_DIR/arch/arm64/boot/Image"
             grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_TRY_UMOUNT)=y$' \
               "$OUT_DIR/.config"
+            grep -E '^CONFIG_LTO_CLANG_THIN=y$' "$OUT_DIR/.config"
             echo "vmlinux strings:"
             grep -E -i -m 20 'kernelsu|susfs' "$RUNNER_TEMP/vmlinux.strings"
             echo "System.map symbols:"
