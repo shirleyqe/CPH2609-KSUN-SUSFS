@@ -186,9 +186,10 @@ jobs:
               text = text.replace(old, new)
           destination.write_text(text, encoding="utf-8")
           PY
-          patch --batch --fuzz=0 -d kernel_platform/common -p1 \
+          patch --batch --fuzz=0 --no-backup-if-mismatch \
+            -d kernel_platform/common -p1 \
             < "$ADAPTED_PATCH"
-          test -z "$(find kernel_platform/common \( -name '*.rej' -o -name '*.orig' \) -print -quit)"
+          test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
           grep -q '#include <linux/susfs_def.h>' kernel_platform/common/mm/memory.c
           grep -q 'CONFIG_KSU_SUSFS_SUS_MAP' kernel_platform/common/mm/memory.c
           python3 - kernel_platform/common/fs/proc/task_mmu.c <<'PY'
@@ -207,7 +208,7 @@ jobs:
           path.write_text(text.replace(include, compatibility), encoding="utf-8")
           PY
           grep -q '#define VMA_PAD_START' kernel_platform/common/fs/proc/task_mmu.c
-          test -z "$(find kernel_platform/common \( -name '*.rej' -o -name '*.orig' \) -print -quit)"
+          test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
 
       - name: Build kernel
         run: |
