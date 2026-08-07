@@ -135,21 +135,35 @@ jobs:
               "@@ -171,6 +195,13 @@ EXPORT_SYMBOL_NS(vfs_getattr, ANDROID_GKI_VFS_EXPORT_ONLY);\n",
               "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
               "fs/stat.c fstat declaration")
-          fstat_hook = "\n".join([
-              "+#ifdef CONFIG_KSU_SUSFS",
-              "+\tif (static_branch_unlikely(&ksu_is_init_rc_hook_enabled))",
-              "+\t\tksu_handle_vfs_fstat(fd, &stat->size);",
-              "+#endif // #ifdef CONFIG_KSU_SUSFS",
-          ]) + "\n"
-          if fstat_hook.count("ksu_handle_vfs_fstat") != 1 or text.count(fstat_hook) != 1:
-              raise SystemExit("unexpected SUSFS fs/stat.c fstat hook")
-          text = text.replace(fstat_hook, "")
-          text = replace_exact(
+          text = remove_between(
               text,
               "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
-              "@@ -180,10 +211,20 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
+              "@@ -206,6 +251,18 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
+              "fs/stat.c fstat hook")
+          tab = chr(9)
+          stat_declarations = "\n".join([
+              "+#ifdef CONFIG_KSU_SUSFS",
+              "+" + tab + "extern bool ksu_su_compat_enabled;",
+              "+" + tab + "extern bool __ksu_is_allow_uid_for_current(uid_t uid);",
+              "+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)",
+              "+" + tab + "extern int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);",
+              "+#else",
+              "+" + tab + "extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);",
+              "+#endif",
+              "+#endif",
+              "+",
+          ]) + "\n"
+          stat_marker = " \tint error;\n \n+#ifdef CONFIG_KSU_SUSFS\n+" + tab + "if (likely(susfs_is_current_proc_umounted()))"
+          if text.count(stat_marker) != 1:
+              raise SystemExit("unexpected SUSFS fs/stat.c statx hunk")
+          stat_prefix = " \tint error;\n \n"
+          text = text.replace(stat_marker, stat_prefix + stat_declarations + stat_marker[len(stat_prefix):])
+          text = replace_exact(
+              text,
+              "@@ -206,6 +251,18 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
+              "@@ -206,6 +251,28 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
               1,
-              "fs/stat.c fstat hunk size")
+              "fs/stat.c statx hunk size")
           text = replace_exact(
               text,
               "+extern struct static_key_true ksu_is_input_hook_enabled;\n",
@@ -178,7 +192,7 @@ jobs:
               text,
               "+extern struct static_key_true ksu_su_compat_enabled;\n",
               "+extern bool ksu_su_compat_enabled;\n",
-              3,
+              2,
               "sucompat declaration")
           text = replace_exact(
               text,
