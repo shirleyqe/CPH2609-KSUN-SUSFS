@@ -11,6 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
+            /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -25,10 +31,11 @@ jobs:
             kernel_platform/common
           git -C kernel_platform/common checkout \
             ce4627cedf3e4aac93ad0b369f623efa057707fe
-          git clone --depth=1 \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            prebuilts/clang/host/linux-x86
-          test -x prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang
+          mkdir -p prebuilts/clang/host/linux-x86/clang-r450784d
+          curl --fail --location --retry 3 \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-qpr3-release/clang-r450784d.tar.gz \
+            | tar -xz -C prebuilts/clang/host/linux-x86/clang-r450784d
+          test -x prebuilts/clang/host/linux-x86/clang-r450784d/bin/clang
 
       - name: Integrate KernelSU Next
         working-directory: kernel_platform
@@ -62,7 +69,7 @@ jobs:
         run: |
           export KERNEL_DIR="$PWD/kernel_platform/common"
           export OUT_DIR="$PWD/out"
-          export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH"
+          export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784d/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
           export LLVM=1
