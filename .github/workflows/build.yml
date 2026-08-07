@@ -41,10 +41,10 @@ jobs:
         working-directory: kernel_platform
         run: |
           curl -LSs \
-            https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.3.0/kernel/setup.sh \
-            | bash -s v3.3.0
+            https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0-legacy-susfs/kernel/setup.sh \
+            | bash -s v3.1.0-legacy-susfs
           test "$(git -C KernelSU-Next rev-parse HEAD)" = \
-            3b18216f71df189ab3d1b1ce0bdb21be1268e771
+            ba4422f0556e10f40dda1887631d87a18ede4ec5
 
       - name: Integrate SUSFS
         run: |
@@ -53,15 +53,11 @@ jobs:
             kernel_platform/susfs4ksu
           git -C kernel_platform/susfs4ksu checkout \
             ccb1918684b27644d17a6c842f57b60ae5966025
-          cp kernel_platform/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch \
-            kernel_platform/KernelSU-Next/
           cp kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch \
             kernel_platform/common/
           cp kernel_platform/susfs4ksu/kernel_patches/fs/* kernel_platform/common/fs/
           cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
             kernel_platform/common/include/linux/
-          patch -d kernel_platform/KernelSU-Next -p1 --forward \
-            < kernel_platform/KernelSU-Next/10_enable_susfs_for_ksu.patch
           patch -d kernel_platform/common -p1 --forward \
             < kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
 
