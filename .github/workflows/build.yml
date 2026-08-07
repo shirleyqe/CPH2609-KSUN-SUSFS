@@ -51,8 +51,12 @@ jobs:
           curl --fail --location --silent --show-error \
             https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0-legacy-susfs/kernel/setup.sh \
             | bash -s v3.1.0-legacy-susfs
-          test "$(git -C KernelSU-Next rev-parse HEAD)" = \
-            ba4422f0556e10f40dda1887631d87a18ede4ec5
+           test "$(git -C KernelSU-Next rev-parse HEAD)" = \
+             ba4422f0556e10f40dda1887631d87a18ede4ec5
+          git -C KernelSU-Next apply --check --whitespace=error \
+            "$GITHUB_WORKSPACE/patches/0002-KernelSU-Next-legacy-SUSFS-compat.patch"
+          git -C KernelSU-Next apply --whitespace=error \
+            "$GITHUB_WORKSPACE/patches/0002-KernelSU-Next-legacy-SUSFS-compat.patch"
           git -C KernelSU-Next apply --check --whitespace=error \
             "$GITHUB_WORKSPACE/patches/0001-KernelSU-Next-remove-deprecated-SUSFS-command-handlers.patch"
           git -C KernelSU-Next apply --whitespace=error \
@@ -80,8 +84,20 @@ jobs:
           cp kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch \
             kernel_platform/common/
           cp kernel_platform/susfs4ksu/kernel_patches/fs/* kernel_platform/common/fs/
-          cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
-            kernel_platform/common/include/linux/
+           cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
+             kernel_platform/common/include/linux/
+          python3 - kernel_platform/common/fs/susfs.c <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          old = "static void susfs_run_sus_path_loop(void)"
+          if text.count(old) != 1:
+              raise SystemExit("unexpected SUSFS path-loop definition")
+          path.write_text(text.replace(old, "void susfs_run_sus_path_loop(void)"),
+                          encoding="utf-8")
+          PY
           SUSFS_PATCH=kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
           ADAPTED_PATCH="$RUNNER_TEMP/50_add_susfs_in_gki-android13-5.15-oneplus.patch"
           python3 - "$SUSFS_PATCH" "$ADAPTED_PATCH" <<'PY'
@@ -91,6 +107,94 @@ jobs:
           source = Path(sys.argv[1])
           destination = Path(sys.argv[2])
           text = source.read_text(encoding="utf-8")
+
+          def remove_between(value, start, end, label):
+              if value.count(start) != 1 or value.count(end) != 1:
+                  raise SystemExit(f"unexpected SUSFS {label} hunk boundary")
+              begin = value.index(start)
+              finish = value.index(end, begin)
+              return value[:begin] + value[finish:]
+
+          def replace_exact(value, old, new, expected, label):
+              if value.count(old) != expected:
+                  raise SystemExit(f"unexpected SUSFS {label} replacement count")
+              return value.replace(old, new)
+
+          for path in ("security/selinux/hooks.c", "security/selinux/selinuxfs.c"):
+              start = f"diff --git a/{path} b/{path}\n"
+              if text.count(start) != 1:
+                  raise SystemExit(f"unexpected SUSFS {path} patch count")
+              begin = text.index(start)
+              finish = text.find("diff --git ", begin + len(start))
+              if finish < 0:
+                  finish = len(text)
+              text = text[:begin] + text[finish:]
+
+          text = remove_between(
+              text,
+              "@@ -171,6 +195,13 @@ EXPORT_SYMBOL_NS(vfs_getattr, ANDROID_GKI_VFS_EXPORT_ONLY);\n",
+              "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
+              "fs/stat.c fstat declaration")
+          fstat_hook = "\n".join([
+              "+#ifdef CONFIG_KSU_SUSFS",
+              "+\tif (static_branch_unlikely(&ksu_is_init_rc_hook_enabled))",
+              "+\t\tksu_handle_vfs_fstat(fd, &stat->size);",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS",
+          ]) + "\n"
+          if fstat_hook.count("ksu_handle_vfs_fstat") != 1 or text.count(fstat_hook) != 1:
+              raise SystemExit("unexpected SUSFS fs/stat.c fstat hook")
+          text = text.replace(fstat_hook, "")
+          text = replace_exact(
+              text,
+              "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
+              "@@ -180,10 +211,20 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
+              1,
+              "fs/stat.c fstat hunk size")
+          text = replace_exact(
+              text,
+              "+extern struct static_key_true ksu_is_input_hook_enabled;\n",
+              "+extern bool ksu_input_hook;\n",
+              1,
+              "input hook declaration")
+          text = replace_exact(
+              text,
+              "+\tif (static_branch_unlikely(&ksu_is_input_hook_enabled))",
+              "+\tif (ksu_input_hook)",
+              1,
+              "input hook branch")
+          text = replace_exact(
+              text,
+              "+extern struct static_key_true ksu_is_init_rc_hook_enabled;\n",
+              "+extern bool ksu_init_rc_hook;\n",
+              1,
+              "init rc hook declaration")
+          text = replace_exact(
+              text,
+              "+\tif (static_branch_unlikely(&ksu_is_init_rc_hook_enabled))",
+              "+\tif (ksu_init_rc_hook)",
+              1,
+              "init rc hook branch")
+          text = replace_exact(
+              text,
+              "+extern struct static_key_true ksu_su_compat_enabled;\n",
+              "+extern bool ksu_su_compat_enabled;\n",
+              3,
+              "sucompat declaration")
+          text = replace_exact(
+              text,
+              "+\tif (static_branch_likely(&ksu_su_compat_enabled))",
+              "+\tif (ksu_su_compat_enabled)",
+              3,
+              "sucompat branch")
+          if any(symbol in text for symbol in (
+              "ksu_is_init_rc_hook_enabled",
+              "ksu_is_input_hook_enabled",
+              "ksu_handle_vfs_fstat",
+              "ksu_selinux_hide_running",
+              "fake_status_initialize_key",
+          )):
+              raise SystemExit("incompatible legacy KernelSU SUSFS symbol remains")
+
           memory_old = "\n".join([
               "@@ -74,6 +74,9 @@",
               " #include <linux/perf_event.h>",
@@ -222,7 +326,8 @@ jobs:
           make -C "$KERNEL_DIR" O="$OUT_DIR" gki_defconfig
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
             --enable KSU --enable KSU_SUSFS \
-            --disable LTO_CLANG_FULL --enable LTO_CLANG_THIN
+            --disable LTO_CLANG_FULL --enable LTO_CLANG_THIN \
+            --enable QCOM_SMEM --enable OPLUS_FEATURE_OPROJECT
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
           make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
           test -s "$OUT_DIR/arch/arm64/boot/Image"
@@ -231,6 +336,8 @@ jobs:
           grep -q '^CONFIG_KSU_SUSFS_SUS_PATH=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS_TRY_UMOUNT=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_LTO_CLANG_THIN=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_QCOM_SMEM=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=y$' "$OUT_DIR/.config"
           test -s "$OUT_DIR/vmlinux"
           test -s "$OUT_DIR/System.map"
           strings "$OUT_DIR/vmlinux" > "$RUNNER_TEMP/vmlinux.strings"
@@ -245,6 +352,8 @@ jobs:
             grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_TRY_UMOUNT)=y$' \
               "$OUT_DIR/.config"
             grep -E '^CONFIG_LTO_CLANG_THIN=y$' "$OUT_DIR/.config"
+            grep -E '^CONFIG_(QCOM_SMEM|OPLUS_FEATURE_OPROJECT)=y$' \
+              "$OUT_DIR/.config"
             echo "vmlinux strings:"
             grep -E -i -m 20 'kernelsu|susfs' "$RUNNER_TEMP/vmlinux.strings"
             echo "System.map symbols:"
