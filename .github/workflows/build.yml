@@ -80,6 +80,9 @@ jobs:
             kernel_platform/common/mm/memory.c
           rm kernel_platform/common/mm/memory.c.rej
           test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
+          sed -i 's|#include <linux/susfs_def.h>|#include <linux/susfs_def.h>\n#ifndef VMA_PAD_START\n#define VMA_PAD_START(vma) (vma->vm_end)\n#endif|' \
+            kernel_platform/common/fs/proc/task_mmu.c
+          grep -q '#define VMA_PAD_START' kernel_platform/common/fs/proc/task_mmu.c
 
       - name: Build kernel
         run: |
