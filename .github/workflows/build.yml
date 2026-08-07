@@ -55,7 +55,7 @@ jobs:
             ccb1918684b27644d17a6c842f57b60ae5966025
           cp kernel_platform/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch \
             kernel_platform/KernelSU-Next/
-          cp kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-5.15.patch \
+          cp kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch \
             kernel_platform/common/
           cp kernel_platform/susfs4ksu/kernel_patches/fs/* kernel_platform/common/fs/
           cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
@@ -63,7 +63,7 @@ jobs:
           patch -d kernel_platform/KernelSU-Next -p1 --forward \
             < kernel_platform/KernelSU-Next/10_enable_susfs_for_ksu.patch
           patch -d kernel_platform/common -p1 --forward \
-            < kernel_platform/common/50_add_susfs_in_kernel-5.15.patch
+            < kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
 
       - name: Build kernel
         run: |
