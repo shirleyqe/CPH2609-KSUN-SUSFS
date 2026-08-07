@@ -1,0 +1,90 @@
+name: Build CPH2609 KSUN SUSFS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kernel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential cpio curl flex git \
+            libelf-dev libssl-dev lld llvm lz4 pahole python3 rsync unzip \
+            xz-utils zip zstd
+
+      - name: Fetch pinned sources
+        run: |
+          git clone --filter=blob:none \
+            https://github.com/OnePlusOSS/android_kernel_oneplus_sm8550.git \
+            kernel_platform/common
+          git -C kernel_platform/common checkout \
+            ce4627cedf3e4aac93ad0b369f623efa057707fe
+          git clone --depth=1 \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            prebuilts/clang/host/linux-x86
+          test -x prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang
+
+      - name: Integrate KernelSU Next
+        working-directory: kernel_platform
+        run: |
+          curl -LSs \
+            https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.3.0/kernel/setup.sh \
+            | bash -s v3.3.0
+          test "$(git -C KernelSU-Next rev-parse HEAD)" = \
+            3b18216f71df189ab3d1b1ce0bdb21be1268e771
+
+      - name: Integrate SUSFS
+        run: |
+          git clone --branch gki-android13-5.15 \
+            https://github.com/ShirkNeko/susfs4ksu.git \
+            kernel_platform/susfs4ksu
+          git -C kernel_platform/susfs4ksu checkout \
+            ccb1918684b27644d17a6c842f57b60ae5966025
+          cp kernel_platform/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch \
+            kernel_platform/KernelSU-Next/
+          cp kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-5.15.patch \
+            kernel_platform/common/
+          cp kernel_platform/susfs4ksu/kernel_patches/fs/* kernel_platform/common/fs/
+          cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
+            kernel_platform/common/include/linux/
+          patch -d kernel_platform/KernelSU-Next -p1 --forward \
+            < kernel_platform/KernelSU-Next/10_enable_susfs_for_ksu.patch
+          patch -d kernel_platform/common -p1 --forward \
+            < kernel_platform/common/50_add_susfs_in_kernel-5.15.patch
+
+      - name: Build kernel
+        run: |
+          export KERNEL_DIR="$PWD/kernel_platform/common"
+          export OUT_DIR="$PWD/out"
+          export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          make -C "$KERNEL_DIR" O="$OUT_DIR" gki_defconfig
+          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+            -e KSU -e KSU_SUSFS -e KSU_SUSFS_HAS_MAGIC_MOUNT
+          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
+          make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
+          test -s "$OUT_DIR/arch/arm64/boot/Image"
+          grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS=y$' "$OUT_DIR/.config"
+          strings "$OUT_DIR/vmlinux" | grep -q KernelSU
+
+      - name: Archive verified kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: CPH2609-OOS14-KSUN-SUSFS-kernel
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            out/arch/arm64/boot/Image
+            out/.config
+            out/System.map
+            out/vmlinux
