@@ -58,8 +58,20 @@ jobs:
           cp kernel_platform/susfs4ksu/kernel_patches/fs/* kernel_platform/common/fs/
           cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
             kernel_platform/common/include/linux/
+          set +e
           patch -d kernel_platform/common -p1 --forward \
             < kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
+          patch_status=$?
+          set -e
+          test "$patch_status" -eq 1
+          test -f kernel_platform/common/mm/memory.c.rej
+          test "$(find kernel_platform/common -name '*.rej' | wc -l)" -eq 1
+          grep -q '#include <linux/susfs_def.h>' \
+            kernel_platform/common/mm/memory.c.rej
+          sed -i '/#include <trace\/hooks\/mm.h>/i #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP' \
+            kernel_platform/common/mm/memory.c
+          rm kernel_platform/common/mm/memory.c.rej
+          test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
 
       - name: Build kernel
         run: |
