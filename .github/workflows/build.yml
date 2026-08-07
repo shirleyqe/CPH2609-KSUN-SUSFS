@@ -14,14 +14,14 @@ jobs:
       - name: Reclaim runner disk
         run: |
           timeout 300 sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
-            /opt/ghc /opt/hostedtoolcache/CodeQL || true
+            /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential cpio curl flex git \
-            libelf-dev libssl-dev lld llvm lz4 pahole python3 rsync unzip \
+            libelf-dev libssl-dev lld llvm lz4 pahole patch python3 rsync unzip \
             xz-utils zip zstd
 
       - name: Fetch pinned sources
@@ -48,11 +48,21 @@ jobs:
       - name: Integrate KernelSU Next
         working-directory: kernel_platform
         run: |
-          curl -LSs \
+          curl --fail --location --silent --show-error \
             https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0-legacy-susfs/kernel/setup.sh \
             | bash -s v3.1.0-legacy-susfs
           test "$(git -C KernelSU-Next rev-parse HEAD)" = \
             ba4422f0556e10f40dda1887631d87a18ede4ec5
+          git -C KernelSU-Next apply --check --whitespace=error \
+            "$GITHUB_WORKSPACE/patches/0001-KernelSU-Next-remove-deprecated-SUSFS-command-handlers.patch"
+          git -C KernelSU-Next apply --whitespace=error \
+            "$GITHUB_WORKSPACE/patches/0001-KernelSU-Next-remove-deprecated-SUSFS-command-handlers.patch"
+          if grep -Eq \
+            'susfs_set_i_state_on_external_dir|susfs_add_try_umount' \
+            KernelSU-Next/kernel/supercalls.c; then
+            echo "deprecated SUSFS command handler remains in KernelSU-Next"
+            exit 1
+          fi
 
       - name: Integrate SUSFS
         run: |
@@ -61,28 +71,77 @@ jobs:
             kernel_platform/susfs4ksu
           git -C kernel_platform/susfs4ksu checkout \
             ccb1918684b27644d17a6c842f57b60ae5966025
+          test "$(git -C kernel_platform/susfs4ksu rev-parse HEAD)" = \
+            ccb1918684b27644d17a6c842f57b60ae5966025
+          test -f kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch
+          test -f kernel_platform/susfs4ksu/kernel_patches/fs/susfs.c
+          test -f kernel_platform/susfs4ksu/kernel_patches/include/linux/susfs.h
+          test -f kernel_platform/susfs4ksu/kernel_patches/include/linux/susfs_def.h
           cp kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch \
             kernel_platform/common/
           cp kernel_platform/susfs4ksu/kernel_patches/fs/* kernel_platform/common/fs/
           cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
             kernel_platform/common/include/linux/
-          set +e
-          patch -d kernel_platform/common -p1 --forward \
-            < kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
-          patch_status=$?
-          set -e
-          test "$patch_status" -eq 1
-          test -f kernel_platform/common/mm/memory.c.rej
-          test "$(find kernel_platform/common -name '*.rej' | wc -l)" -eq 1
-          grep -q '#include <linux/susfs_def.h>' \
-            kernel_platform/common/mm/memory.c.rej
-          sed -i '/#include <trace\/hooks\/mm.h>/i #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP' \
-            kernel_platform/common/mm/memory.c
-          rm kernel_platform/common/mm/memory.c.rej
-          test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
-          sed -i 's|#include <linux/susfs_def.h>|#include <linux/susfs_def.h>\n#ifndef VMA_PAD_START\n#define VMA_PAD_START(vma) (vma->vm_end)\n#endif|' \
-            kernel_platform/common/fs/proc/task_mmu.c
+          SUSFS_PATCH=kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
+          ADAPTED_PATCH="$RUNNER_TEMP/50_add_susfs_in_gki-android13-5.15-oneplus.patch"
+          python3 - "$SUSFS_PATCH" "$ADAPTED_PATCH" <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          text = source.read_text(encoding="utf-8")
+          old = "\n".join([
+              "@@ -74,6 +74,9 @@",
+              " #include <linux/perf_event.h>",
+              " #include <linux/ptrace.h>",
+              " #include <linux/vmalloc.h>",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+#include <linux/susfs_def.h>",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              " #include <trace/hooks/mm.h>",
+              " ",
+              " #include <trace/events/kmem.h>",
+          ]) + "\n"
+          new = "\n".join([
+              "@@ -74,7 +74,10 @@",
+              " #include <linux/perf_event.h>",
+              " #include <linux/ptrace.h>",
+              " #include <linux/vmalloc.h>",
+              " #include <linux/swap_slots.h>",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+#include <linux/susfs_def.h>",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              " #include <trace/hooks/mm.h>",
+              " ",
+              " #include <trace/events/kmem.h>",
+          ]) + "\n"
+          if text.count(old) != 1:
+              raise SystemExit("unexpected SUSFS memory.c hunk count")
+          destination.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          patch --batch --fuzz=0 -d kernel_platform/common -p1 \
+            < "$ADAPTED_PATCH"
+          test -z "$(find kernel_platform/common \( -name '*.rej' -o -name '*.orig' \) -print -quit)"
+          grep -q '#include <linux/susfs_def.h>' kernel_platform/common/mm/memory.c
+          grep -q 'CONFIG_KSU_SUSFS_SUS_MAP' kernel_platform/common/mm/memory.c
+          python3 - kernel_platform/common/fs/proc/task_mmu.c <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          include = "#include <linux/susfs_def.h>\n"
+          compatibility = (include +
+                          "#ifndef VMA_PAD_START\n"
+                          "#define VMA_PAD_START(vma) (vma->vm_end)\n"
+                          "#endif\n")
+          if text.count(include) != 1:
+              raise SystemExit("unexpected task_mmu.c SUSFS include count")
+          path.write_text(text.replace(include, compatibility), encoding="utf-8")
+          PY
           grep -q '#define VMA_PAD_START' kernel_platform/common/fs/proc/task_mmu.c
+          test -z "$(find kernel_platform/common \( -name '*.rej' -o -name '*.orig' \) -print -quit)"
 
       - name: Build kernel
         run: |
@@ -95,13 +154,33 @@ jobs:
           export LLVM_IAS=1
           make -C "$KERNEL_DIR" O="$OUT_DIR" gki_defconfig
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
-            -e KSU -e KSU_SUSFS -e KSU_SUSFS_HAS_MAGIC_MOUNT
+            --enable KSU --enable KSU_SUSFS
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
           make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
           test -s "$OUT_DIR/arch/arm64/boot/Image"
           grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS=y$' "$OUT_DIR/.config"
-          strings "$OUT_DIR/vmlinux" | grep -q KernelSU
+          grep -q '^CONFIG_KSU_SUSFS_SUS_PATH=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS_TRY_UMOUNT=y$' "$OUT_DIR/.config"
+          test -s "$OUT_DIR/vmlinux"
+          test -s "$OUT_DIR/System.map"
+          strings "$OUT_DIR/vmlinux" > "$RUNNER_TEMP/vmlinux.strings"
+          grep -q KernelSU "$RUNNER_TEMP/vmlinux.strings"
+          grep -qi SUSFS "$RUNNER_TEMP/vmlinux.strings"
+          grep -Eq ' [Tt] susfs_init$' "$OUT_DIR/System.map"
+          grep -Eq ' [Tt] (susfs_add_sus_path|susfs_get_enabled_features)$' \
+            "$OUT_DIR/System.map"
+          {
+            echo "Image size: $(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
+            sha256sum "$OUT_DIR/arch/arm64/boot/Image"
+            grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_TRY_UMOUNT)=y$' \
+              "$OUT_DIR/.config"
+            echo "vmlinux strings:"
+            grep -E -i -m 20 'kernelsu|susfs' "$RUNNER_TEMP/vmlinux.strings"
+            echo "System.map symbols:"
+            grep -E ' [Tt] (susfs_init|susfs_add_sus_path|susfs_get_enabled_features)$' \
+              "$OUT_DIR/System.map"
+          } | tee "$OUT_DIR/verification.txt"
 
       - name: Archive verified kernel
         uses: actions/upload-artifact@v4
@@ -114,3 +193,4 @@ jobs:
             out/.config
             out/System.map
             out/vmlinux
+            out/verification.txt
