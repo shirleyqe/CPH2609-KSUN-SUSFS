@@ -37,11 +37,7 @@ jobs:
           git -C oneplus_vendor sparse-checkout set vendor/oplus/kernel
           git -C oneplus_vendor checkout \
             6ada53700a567e0b92cebebccb49b74db720f96a
-          for module in oneplus_vendor/vendor/oplus/kernel/*; do
-            test -d "$module" || continue
-            ln -s "$PWD/$module" \
-              "kernel_platform/common/kernel/oplus_$(basename "$module")"
-          done
+          ln -s "$PWD/oneplus_vendor/vendor" vendor
           mkdir -p prebuilts/clang/host/linux-x86/clang-r450784d
           curl --fail --location --retry 3 \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-qpr3-release/clang-r450784d.tar.gz \
