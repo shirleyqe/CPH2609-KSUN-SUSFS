@@ -34,7 +34,7 @@ jobs:
           git clone --filter=blob:none --no-checkout \
             https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8550.git \
             oneplus_vendor
-          git -C oneplus_vendor sparse-checkout set vendor/oplus/kernel
+          git -C oneplus_vendor sparse-checkout set vendor/oplus
           git -C oneplus_vendor checkout \
             6ada53700a567e0b92cebebccb49b74db720f96a
           ln -s "$PWD/oneplus_vendor/vendor" vendor
