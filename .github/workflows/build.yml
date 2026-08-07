@@ -91,7 +91,7 @@ jobs:
           source = Path(sys.argv[1])
           destination = Path(sys.argv[2])
           text = source.read_text(encoding="utf-8")
-          old = "\n".join([
+          memory_old = "\n".join([
               "@@ -74,6 +74,9 @@",
               " #include <linux/perf_event.h>",
               " #include <linux/ptrace.h>",
@@ -103,22 +103,88 @@ jobs:
               " ",
               " #include <trace/events/kmem.h>",
           ]) + "\n"
-          new = "\n".join([
-              "@@ -74,7 +74,10 @@",
-              " #include <linux/perf_event.h>",
-              " #include <linux/ptrace.h>",
-              " #include <linux/vmalloc.h>",
-              " #include <linux/swap_slots.h>",
+          memory_new = "\n".join([
+              "@@ -76,1 +76,4 @@",
+              "-#include <linux/swap_slots.h>",
+              "+#include <linux/swap_slots.h>",
               "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
               "+#include <linux/susfs_def.h>",
               "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              " #include <trace/hooks/mm.h>",
-              " ",
-              " #include <trace/events/kmem.h>",
           ]) + "\n"
-          if text.count(old) != 1:
-              raise SystemExit("unexpected SUSFS memory.c hunk count")
-          destination.write_text(text.replace(old, new), encoding="utf-8")
+          namei_old = "\n".join([
+              "@@ -1565,6 +1590,17 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
+              " \t\tdput(dentry);",
+              " \t\tdentry = old;",
+              " \t}",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_PATH",
+              "+\tif (unlikely(dentry) && !IS_ERR(dentry) && dentry->d_inode && !found_sus_path && susfs_is_inode_sus_path(dentry->d_inode)) {",
+              "+\t\tif (d_in_lookup(dentry))",
+              "+\t\t\td_lookup_done(dentry);",
+              "+\t\tif (!(flags & LOOKUP_RCU))",
+              "+\t\t\tdput(dentry);",
+              "+\t\tdentry = d_alloc(base, &susfs_fake_qstr_name);",
+              "+\t\tfound_sus_path = true;",
+              "+\t\tgoto retry;",
+              "+\t}",
+              "+#endif",
+              " \treturn dentry;",
+              " }",
+              " EXPORT_SYMBOL(lookup_one_qstr_excl);",
+          ]) + "\n"
+          namei_new = "\n".join([
+              "@@ -1566,1 +1566,12 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
+              "-\t\tdentry = old;",
+              "+\t\tdentry = old;",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_PATH",
+              "+\tif (unlikely(dentry) && !IS_ERR(dentry) && dentry->d_inode && !found_sus_path && susfs_is_inode_sus_path(dentry->d_inode)) {",
+              "+\t\tif (d_in_lookup(dentry))",
+              "+\t\t\td_lookup_done(dentry);",
+              "+\t\tif (!(flags & LOOKUP_RCU))",
+              "+\t\t\tdput(dentry);",
+              "+\t\tdentry = d_alloc(base, &susfs_fake_qstr_name);",
+              "+\t\tfound_sus_path = true;",
+              "+\t\tgoto retry;",
+              "+\t}",
+              "+#endif",
+          ]) + "\n"
+          task_old = "\n".join([
+              "@@ -857,6 +895,13 @@ static int show_smap(struct seq_file *m, void *v)",
+              " \tstruct vm_area_struct *vma = v;",
+              " \tstruct mem_size_stats mss;",
+              " ",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+\tif (vma->vm_file) {",
+              "+\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))",
+              "+\t\t\treturn 0;",
+              "+\t}",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+",
+              " \tmemset(&mss, 0, sizeof(mss));",
+              " ",
+              " \tif (!vma_pages(vma))",
+          ]) + "\n"
+          task_new = "\n".join([
+              "@@ -860,1 +860,8 @@ static int show_smap(struct seq_file *m, void *v)",
+              "-\tmemset(&mss, 0, sizeof(mss));",
+              "+\tmemset(&mss, 0, sizeof(mss));",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+\tif (vma->vm_file) {",
+              "+\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))",
+              "+\t\t\treturn 0;",
+              "+\t}",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+",
+          ]) + "\n"
+          replacements = [
+              ("memory.c", memory_old, memory_new),
+              ("namei.c", namei_old, namei_new),
+              ("task_mmu.c", task_old, task_new),
+          ]
+          for name, old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f"unexpected SUSFS {name} hunk count")
+              text = text.replace(old, new)
+          destination.write_text(text, encoding="utf-8")
           PY
           patch --batch --fuzz=0 -d kernel_platform/common -p1 \
             < "$ADAPTED_PATCH"
