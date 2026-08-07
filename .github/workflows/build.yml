@@ -98,6 +98,25 @@ jobs:
           path.write_text(text.replace(old, "void susfs_run_sus_path_loop(void)"),
                           encoding="utf-8")
           PY
+          python3 - kernel_platform/common/drivers/soc/oplus/sensor/oplus_sensor_devinfo.c <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          marker = '#include "oplus_sensor_devinfo.h"\n'
+          fallback = (marker +
+                      "\n#ifndef CONFIG_OPLUS_FEATURE_OPROJECT\n"
+                      "unsigned int __weak get_project(void)\n"
+                      "{\n"
+                      "\treturn 0;\n"
+                      "}\n"
+                      "EXPORT_SYMBOL(get_project);\n"
+                      "#endif\n")
+          if text.count(marker) != 1:
+              raise SystemExit("unexpected Oplus sensor header")
+          path.write_text(text.replace(marker, fallback), encoding="utf-8")
+          PY
           SUSFS_PATCH=kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
           ADAPTED_PATCH="$RUNNER_TEMP/50_add_susfs_in_gki-android13-5.15-oneplus.patch"
           python3 - "$SUSFS_PATCH" "$ADAPTED_PATCH" <<'PY'
@@ -341,7 +360,7 @@ jobs:
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
             --enable KSU --enable KSU_SUSFS \
             --disable LTO_CLANG_FULL --enable LTO_CLANG_THIN \
-            --enable QCOM_SMEM --enable OPLUS_FEATURE_OPROJECT
+            --enable QCOM_SMEM --disable OPLUS_FEATURE_OPROJECT
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
           make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
           test -s "$OUT_DIR/arch/arm64/boot/Image"
@@ -351,7 +370,7 @@ jobs:
           grep -q '^CONFIG_KSU_SUSFS_TRY_UMOUNT=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_LTO_CLANG_THIN=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_QCOM_SMEM=y$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=y$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' "$OUT_DIR/.config"
           test -s "$OUT_DIR/vmlinux"
           test -s "$OUT_DIR/System.map"
           strings "$OUT_DIR/vmlinux" > "$RUNNER_TEMP/vmlinux.strings"
@@ -366,7 +385,7 @@ jobs:
             grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_TRY_UMOUNT)=y$' \
               "$OUT_DIR/.config"
             grep -E '^CONFIG_LTO_CLANG_THIN=y$' "$OUT_DIR/.config"
-            grep -E '^CONFIG_(QCOM_SMEM|OPLUS_FEATURE_OPROJECT)=y$' \
+            grep -E '^CONFIG_QCOM_SMEM=y$|^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' \
               "$OUT_DIR/.config"
             echo "vmlinux strings:"
             grep -E -i -m 20 'kernelsu|susfs' "$RUNNER_TEMP/vmlinux.strings"
