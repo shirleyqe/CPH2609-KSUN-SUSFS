@@ -53,12 +53,36 @@ jobs:
             | bash -s v3.1.0-legacy-susfs
            test "$(git -C KernelSU-Next rev-parse HEAD)" = \
              ba4422f0556e10f40dda1887631d87a18ede4ec5
-          git -C KernelSU-Next apply --check --whitespace=error \
-            "$GITHUB_WORKSPACE/patches/0002-KernelSU-Next-legacy-SUSFS-compat.patch"
-          git -C KernelSU-Next apply --whitespace=error \
-            "$GITHUB_WORKSPACE/patches/0002-KernelSU-Next-legacy-SUSFS-compat.patch"
-          git -C KernelSU-Next apply --check --whitespace=error \
-            "$GITHUB_WORKSPACE/patches/0001-KernelSU-Next-remove-deprecated-SUSFS-command-handlers.patch"
+           git -C KernelSU-Next apply --check --whitespace=error \
+             "$GITHUB_WORKSPACE/patches/0002-KernelSU-Next-legacy-SUSFS-compat.patch"
+           git -C KernelSU-Next apply --whitespace=error \
+             "$GITHUB_WORKSPACE/patches/0002-KernelSU-Next-legacy-SUSFS-compat.patch"
+           python3 - KernelSU-Next/kernel/setuid_hook.c <<'PY'
+           from pathlib import Path
+           import sys
+
+           path = Path(sys.argv[1])
+           text = path.read_text(encoding="utf-8")
+           replacements = [
+               ("extern void susfs_run_sus_path_loop(uid_t uid);",
+                "extern void susfs_run_sus_path_loop(void);"),
+               ("extern void susfs_reorder_mnt_id(void);\n", ""),
+               ("extern void susfs_try_umount(uid_t uid);\n", ""),
+               ("    susfs_try_umount(new_uid);",
+                "    ksu_handle_umount(old_uid, new_uid);"),
+               ("    susfs_reorder_mnt_id();\n", ""),
+               ("    susfs_run_sus_path_loop(new_uid);",
+                "    susfs_run_sus_path_loop();"),
+           ]
+           for old, new in replacements:
+               if text.count(old) != 1:
+                   raise SystemExit(f"unexpected setuid_hook.c text: {old!r}")
+               text = text.replace(old, new)
+           path.write_text(text, encoding="utf-8")
+           PY
+           test "$(grep -c 'susfs_try_umount' KernelSU-Next/kernel/setuid_hook.c)" -eq 0
+           git -C KernelSU-Next apply --check --whitespace=error \
+             "$GITHUB_WORKSPACE/patches/0001-KernelSU-Next-remove-deprecated-SUSFS-command-handlers.patch"
           git -C KernelSU-Next apply --whitespace=error \
             "$GITHUB_WORKSPACE/patches/0001-KernelSU-Next-remove-deprecated-SUSFS-command-handlers.patch"
           if grep -Eq \
