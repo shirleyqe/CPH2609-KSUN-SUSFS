@@ -452,12 +452,17 @@ jobs:
           #     CPH2609_14.0.0.831(EX01) boot kernel) + minimal KSUN/SUSFS.
           #     No LTO override: stock is Full LTO, keep it.
           #     No QCOM_SMEM override: stock leaves it off (vendor_boot dlkm).
+          #     TRIM_UNUSED_KSYMS: stock enables it, but its whitelist is a
+          #     vendor-build-machine absolute path unavailable to public
+          #     builds; disabling it yields an export superset (no module
+          #     symbol can go missing) at negligible Image size cost.
           mkdir -p "$OUT_DIR"
           tr -d '\r' < "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
             > "$OUT_DIR/.config"
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
             --enable KSU --enable KSU_SUSFS \
-            --disable OPLUS_FEATURE_OPROJECT
+            --disable OPLUS_FEATURE_OPROJECT \
+            --disable TRIM_UNUSED_KSYMS
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
           cp "$OUT_DIR/.config" "$OUT_DIR/.config.v2"
           # --- V1 reference config: same tree/toolchain, legacy V1 switches,
@@ -492,6 +497,7 @@ jobs:
           grep -q '^CONFIG_GKI_HIDDEN_QCOM_CONFIGS=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_QCOM_SMEM_STATE=y$' "$OUT_DIR/.config"
           grep -q '^# CONFIG_QCOM_SMEM is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_TRIM_UNUSED_KSYMS is not set$' "$OUT_DIR/.config"
           if grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=' "$OUT_DIR/.config"; then
             grep -q '^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' "$OUT_DIR/.config"
           fi
@@ -514,6 +520,8 @@ jobs:
             grep -E '^CONFIG_(IKCONFIG|IKCONFIG_PROC|GKI_HIDDEN_QCOM_CONFIGS|QCOM_SMEM_STATE)=y$|^# CONFIG_QCOM_SMEM is not set$' \
               "$OUT_DIR/.config"
             grep -E '^CONFIG_(OPLUS_FEATURE_STORAGE_IO_METRICS|OPLUS_FEATURE_FILE_MONITOR)=|^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' \
+              "$OUT_DIR/.config"
+            grep -E '^# CONFIG_TRIM_UNUSED_KSYMS is not set$|^CONFIG_UNUSED_KSYMS_WHITELIST' \
               "$OUT_DIR/.config"
             echo "V1 reference profile (for diff):"
             grep -E '^CONFIG_LTO_CLANG_THIN=y$|^# CONFIG_LTO_CLANG_FULL is not set$|^CONFIG_QCOM_SMEM=y$' \
