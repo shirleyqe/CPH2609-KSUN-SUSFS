@@ -2,6 +2,9 @@ name: Build CPH2609 KSUN SUSFS
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   kernel:
