@@ -56,7 +56,7 @@ jobs:
             | bash -s v3.1.0-legacy-susfs
            test "$(git -C KernelSU-Next rev-parse HEAD)" = \
              ba4422f0556e10f40dda1887631d87a18ede4ec5
-           python3 - <<'PY'
+          python3 - <<'PY'
           if True:
            from pathlib import Path
 
@@ -147,7 +147,7 @@ jobs:
                "",
                "deprecated SUSFS try_umount handler",
            )
-           PY
+          PY
            if grep -REq \
              'susfs_try_umount|susfs_reorder_mnt_id|susfs_set_i_state_on_external_dir|susfs_add_try_umount' \
              KernelSU-Next/kernel/setuid_hook.c KernelSU-Next/kernel/supercalls.c; then
