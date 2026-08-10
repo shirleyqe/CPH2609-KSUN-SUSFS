@@ -65,9 +65,9 @@ jobs:
            def replace(path, old, new, label):
                file = root / path
                text = file.read_text(encoding="utf-8")
-            if text.count(old) != 1:
-                raise SystemExit(f"unexpected {label} replacement count")
-            file.write_text(text.replace(old, new), encoding="utf-8")
+               if text.count(old) != 1:
+                   raise SystemExit(f"unexpected {label} replacement count")
+               file.write_text(text.replace(old, new), encoding="utf-8")
 
            replace(
                "ksud.c",
