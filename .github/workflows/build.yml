@@ -442,26 +442,59 @@ jobs:
         run: |
           export KERNEL_DIR="$PWD/kernel_platform/common"
           export OUT_DIR="$PWD/out"
+          export OUT_DIR_V1="$PWD/out-v1"
           export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784d/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
-          make -C "$KERNEL_DIR" O="$OUT_DIR" gki_defconfig
+          # --- V2 config: stock fidelity base (OEM .config extracted from
+          #     CPH2609_14.0.0.831(EX01) boot kernel) + minimal KSUN/SUSFS.
+          #     No LTO override: stock is Full LTO, keep it.
+          #     No QCOM_SMEM override: stock leaves it off (vendor_boot dlkm).
+          mkdir -p "$OUT_DIR"
+          tr -d '\r' < "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
+            > "$OUT_DIR/.config"
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+            --enable KSU --enable KSU_SUSFS \
+            --disable OPLUS_FEATURE_OPROJECT
+          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
+          cp "$OUT_DIR/.config" "$OUT_DIR/.config.v2"
+          # --- V1 reference config: same tree/toolchain, legacy V1 switches,
+          #     generated here for the V1/V2 config diff artifact ---
+          mkdir -p "$OUT_DIR_V1"
+          make -C "$KERNEL_DIR" O="$OUT_DIR_V1" gki_defconfig
+          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR_V1/.config" \
             --enable KSU --enable KSU_SUSFS \
             --disable LTO_CLANG_FULL --enable LTO_CLANG_THIN \
             --enable QCOM_SMEM --disable OPLUS_FEATURE_OPROJECT
-          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
+          make -C "$KERNEL_DIR" O="$OUT_DIR_V1" olddefconfig
+          cp "$OUT_DIR_V1/.config" "$OUT_DIR_V1/.config.v1"
+          # --- V2 build: Full LTO (stock profile) ---
           make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
           test -s "$OUT_DIR/arch/arm64/boot/Image"
           grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS_SUS_PATH=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS_SUS_MAP=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS_SUS_KSTAT=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS_SUS_MOUNT=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS_TRY_UMOUNT=y$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_LTO_CLANG_THIN=y$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_QCOM_SMEM=y$' "$OUT_DIR/.config"
-          grep -q '^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS_OPEN_REDIRECT=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS_SPOOF_UNAME=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS_ENABLE_LOG=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_LTO_CLANG_FULL=y$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_LTO_CLANG_THIN is not set$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_IKCONFIG=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_IKCONFIG_PROC=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_GKI_HIDDEN_QCOM_CONFIGS=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_QCOM_SMEM_STATE=y$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_QCOM_SMEM is not set$' "$OUT_DIR/.config"
+          if grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=' "$OUT_DIR/.config"; then
+            grep -q '^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' "$OUT_DIR/.config"
+          fi
           test -s "$OUT_DIR/vmlinux"
           test -s "$OUT_DIR/System.map"
           strings "$OUT_DIR/vmlinux" > "$RUNNER_TEMP/vmlinux.strings"
@@ -471,13 +504,20 @@ jobs:
           grep -Eq ' [Tt] (susfs_add_sus_path|susfs_get_enabled_features)$' \
             "$OUT_DIR/System.map"
           {
-            echo "Image size: $(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
+            echo "V2 Image size: $(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
             sha256sum "$OUT_DIR/arch/arm64/boot/Image"
-            grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_TRY_UMOUNT)=y$' \
+            echo "V2 config profile:"
+            grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_SUS_MAP|KSU_SUSFS_SUS_KSTAT|KSU_SUSFS_SUS_MOUNT|KSU_SUSFS_TRY_UMOUNT|KSU_SUSFS_OPEN_REDIRECT|KSU_SUSFS_SPOOF_UNAME|KSU_SUSFS_ENABLE_LOG|KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS|KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG)=y$' \
               "$OUT_DIR/.config"
-            grep -E '^CONFIG_LTO_CLANG_THIN=y$' "$OUT_DIR/.config"
-            grep -E '^CONFIG_QCOM_SMEM=y$|^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' \
+            grep -E '^CONFIG_(LTO|LTO_CLANG|LTO_CLANG_FULL)=y$|^# CONFIG_LTO_CLANG_THIN is not set$' \
               "$OUT_DIR/.config"
+            grep -E '^CONFIG_(IKCONFIG|IKCONFIG_PROC|GKI_HIDDEN_QCOM_CONFIGS|QCOM_SMEM_STATE)=y$|^# CONFIG_QCOM_SMEM is not set$' \
+              "$OUT_DIR/.config"
+            grep -E '^CONFIG_(OPLUS_FEATURE_STORAGE_IO_METRICS|OPLUS_FEATURE_FILE_MONITOR)=|^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' \
+              "$OUT_DIR/.config"
+            echo "V1 reference profile (for diff):"
+            grep -E '^CONFIG_LTO_CLANG_THIN=y$|^# CONFIG_LTO_CLANG_FULL is not set$|^CONFIG_QCOM_SMEM=y$' \
+              "$OUT_DIR_V1/.config"
             echo "vmlinux strings:"
             grep -E -i -m 20 'kernelsu|susfs' "$RUNNER_TEMP/vmlinux.strings"
             echo "System.map symbols:"
@@ -495,6 +535,8 @@ jobs:
           path: |
             out/arch/arm64/boot/Image
             out/.config
+            out/.config.v2
             out/System.map
             out/vmlinux
             out/verification.txt
+            out-v1/.config

@@ -10,9 +10,24 @@ Pinned inputs:
 - SUSFS: Android 13 GKI 5.15 (`ccb1918684b27644d17a6c842f57b60ae5966025`)
 - Public Android Clang: `r450784d` from `android13-qpr3-release`
 
-The hosted build selects Clang ThinLTO instead of the GKI defconfig's FullLTO
-so the complete verification build fits the runner execution window; the
-selected mode is recorded in the artifact `.config`.
+Toolchain note: the stock `.831(EX01)` boot kernel was compiled with clang
+`r450784e` ("Android (8508608, based on r450784e)"). `r450784e` is NOT
+published on `android13-qpr3-release` (googlesource archive returns 400 for
+`clang-r450784e.tar.gz`), so the closest obtainable public build is
+`r450784d` (one build number earlier, same branch). The resulting compiler
+self-string differs only in the `r450784d` vs `r450784e` suffix; everything
+else (clang 14.0.7 line, AArch64 defaults) matches the stock toolchain.
+
+V2 build policy (stock fidelity):
+
+- Config base: `stock-config/stock_config.txt` — the OEM `.config` embedded
+  in the stock `.831(EX01)` boot kernel (IKCONFIG blob), extracted verbatim.
+- Only KSUN/SUSFS switches are added (`--enable KSU --enable KSU_SUSFS`).
+- Full LTO is KEPT (stock profile). The previous ThinLTO selection was a
+  runner-time compromise and is no longer applied.
+- `CONFIG_QCOM_SMEM` stays off like stock (vendor_boot dlkm carries it).
+- The workflow also regenerates the V1 reference config (gki_defconfig +
+  legacy V1 switches) into the artifact for the V1/V2 config diff.
 
 The workflow produces a kernel `Image`, not a flashable image. The final `boot.img`
 must retain the exact CPH2609 `.831(EX01)` stock boot header and ramdisk.
