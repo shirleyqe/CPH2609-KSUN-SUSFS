@@ -57,6 +57,7 @@ jobs:
            test "$(git -C KernelSU-Next rev-parse HEAD)" = \
              ba4422f0556e10f40dda1887631d87a18ede4ec5
            python3 - <<'PY'
+          if True:
            from pathlib import Path
 
            root = Path("KernelSU-Next/kernel")
