@@ -86,8 +86,8 @@ jobs:
            )
            replace(
                "ksud.c",
-               "pr_info(\"unregister input kprobe: %d\\n\", ret);",
-               "pr_info(\"unregister input kprobe: %d\\n\", ret);\n"
+               "pr_info(\"unregister input kprobe: %d!\\n\", ret);",
+               "pr_info(\"unregister input kprobe: %d!\\n\", ret);\n"
                "    ksu_input_hook = false;",
                "input compatibility state",
            )
