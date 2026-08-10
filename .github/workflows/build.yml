@@ -226,7 +226,12 @@ jobs:
                   raise SystemExit(f"unexpected SUSFS {label} replacement count")
               return value.replace(old, new)
 
-          for path in ("security/selinux/hooks.c", "security/selinux/selinuxfs.c"):
+          for path in (
+              "drivers/input/input.c",
+              "fs/read_write.c",
+              "security/selinux/hooks.c",
+              "security/selinux/selinuxfs.c",
+          ):
               start = f"diff --git a/{path} b/{path}\n"
               if text.count(start) != 1:
                   raise SystemExit(f"unexpected SUSFS {path} patch count")
@@ -270,30 +275,6 @@ jobs:
               "@@ -206,6 +251,28 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
               1,
               "fs/stat.c statx hunk size")
-          text = replace_exact(
-              text,
-              "+extern struct static_key_true ksu_is_input_hook_enabled;\n",
-              "+extern bool ksu_input_hook;\n",
-              1,
-              "input hook declaration")
-          text = replace_exact(
-              text,
-              "+\tif (static_branch_unlikely(&ksu_is_input_hook_enabled))",
-              "+\tif (ksu_input_hook)",
-              1,
-              "input hook branch")
-          text = replace_exact(
-              text,
-              "+extern struct static_key_true ksu_is_init_rc_hook_enabled;\n",
-              "+extern bool ksu_init_rc_hook;\n",
-              1,
-              "init rc hook declaration")
-          text = replace_exact(
-              text,
-              "+\tif (static_branch_unlikely(&ksu_is_init_rc_hook_enabled))",
-              "+\tif (ksu_init_rc_hook)",
-              1,
-              "init rc hook branch")
           text = replace_exact(
               text,
               "+extern struct static_key_true ksu_su_compat_enabled;\n",
