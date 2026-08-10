@@ -120,27 +120,29 @@ jobs:
 
            replace(
                "supercalls.c",
-               """        if (cmd == CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH) {
-            susfs_set_i_state_on_external_dir(arg);
-            return 0;
-        }
-        if (cmd == CMD_SUSFS_SET_SDCARD_ROOT_PATH) {
-            susfs_set_i_state_on_external_dir(arg);
-            return 0;
-        }
-""",
+               "\n".join([
+                   "        if (cmd == CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH) {",
+                   "            susfs_set_i_state_on_external_dir(arg);",
+                   "            return 0;",
+                   "        }",
+                   "        if (cmd == CMD_SUSFS_SET_SDCARD_ROOT_PATH) {",
+                   "            susfs_set_i_state_on_external_dir(arg);",
+                   "            return 0;",
+                   "        }",
+               ]) + "\n",
                "",
                "deprecated SUSFS path handlers",
            )
            replace(
                "supercalls.c",
-               """#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
-        if (cmd == CMD_SUSFS_ADD_TRY_UMOUNT) {
-            susfs_add_try_umount(arg);
-            return 0;
-        }
-#endif //#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
-""",
+               "\n".join([
+                   "#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT",
+                   "        if (cmd == CMD_SUSFS_ADD_TRY_UMOUNT) {",
+                   "            susfs_add_try_umount(arg);",
+                   "            return 0;",
+                   "        }",
+                   "#endif //#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT",
+               ]) + "\n",
                "",
                "deprecated SUSFS try_umount handler",
            )
