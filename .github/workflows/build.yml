@@ -65,9 +65,32 @@ jobs:
            def replace(path, old, new, label):
                file = root / path
                text = file.read_text(encoding="utf-8")
-               if text.count(old) != 1:
-                   raise SystemExit(f"unexpected {label} replacement count")
-               file.write_text(text.replace(old, new), encoding="utf-8")
+            if text.count(old) != 1:
+                raise SystemExit(f"unexpected {label} replacement count")
+            file.write_text(text.replace(old, new), encoding="utf-8")
+
+           replace(
+               "ksud.c",
+               "static struct work_struct __maybe_unused stop_input_hook_work;\n#else",
+               "static struct work_struct __maybe_unused stop_input_hook_work;\n"
+               "bool ksu_init_rc_hook __read_mostly = true;\n"
+               "bool ksu_input_hook __read_mostly = true;\n#else",
+               "Kprobes hook compatibility variables",
+           )
+           replace(
+               "ksud.c",
+               "pr_info(\"unregister init_rc_hook kprobe: %d!\\n\", ret);",
+               "pr_info(\"unregister init_rc_hook kprobe: %d!\\n\", ret);\n"
+               "    ksu_init_rc_hook = false;",
+               "init rc compatibility state",
+           )
+           replace(
+               "ksud.c",
+               "pr_info(\"unregister input kprobe: %d\\n\", ret);",
+               "pr_info(\"unregister input kprobe: %d\\n\", ret);\n"
+               "    ksu_input_hook = false;",
+               "input compatibility state",
+           )
 
            replace(
                "kernel_umount.h",
