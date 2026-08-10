@@ -53,44 +53,101 @@ jobs:
             | bash -s v3.1.0-legacy-susfs
            test "$(git -C KernelSU-Next rev-parse HEAD)" = \
              ba4422f0556e10f40dda1887631d87a18ede4ec5
-           git -C KernelSU-Next apply --check --whitespace=error \
-             "$GITHUB_WORKSPACE/patches/0002-KernelSU-Next-legacy-SUSFS-compat.patch"
-           git -C KernelSU-Next apply --whitespace=error \
-             "$GITHUB_WORKSPACE/patches/0002-KernelSU-Next-legacy-SUSFS-compat.patch"
-           python3 - KernelSU-Next/kernel/setuid_hook.c <<'PY'
+           python3 - <<'PY'
            from pathlib import Path
-           import sys
 
-           path = Path(sys.argv[1])
-           text = path.read_text(encoding="utf-8")
-           replacements = [
-               ("extern void susfs_run_sus_path_loop(uid_t uid);",
-                "extern void susfs_run_sus_path_loop(void);"),
-               ("extern void susfs_reorder_mnt_id(void);\n", ""),
-               ("extern void susfs_try_umount(uid_t uid);\n", ""),
-               ("    susfs_try_umount(new_uid);",
-                "    ksu_handle_umount(old_uid, new_uid);"),
-               ("    susfs_reorder_mnt_id();\n", ""),
-               ("    susfs_run_sus_path_loop(new_uid);",
-                "    susfs_run_sus_path_loop();"),
-           ]
-           for old, new in replacements:
+           root = Path("KernelSU-Next/kernel")
+
+           def replace(path, old, new, label):
+               file = root / path
+               text = file.read_text(encoding="utf-8")
                if text.count(old) != 1:
-                   raise SystemExit(f"unexpected setuid_hook.c text: {old!r}")
-               text = text.replace(old, new)
-           path.write_text(text, encoding="utf-8")
+                   raise SystemExit(f"unexpected {label} replacement count")
+               file.write_text(text.replace(old, new), encoding="utf-8")
+
+           replace(
+               "kernel_umount.h",
+               "#if !defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n"
+               " // Handler function to be called from setresuid hook\n"
+               " int ksu_handle_umount(uid_t old_uid, uid_t new_uid);\n"
+               "#endif\n",
+               " // Handler function to be called from setresuid hook\n"
+               " int ksu_handle_umount(uid_t old_uid, uid_t new_uid);\n",
+               "kernel_umount.h handler guard",
+           )
+           replace(
+               "kernel_umount.c",
+               "#if !defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n"
+               "static void umount_tw_func(struct callback_head *cb)",
+               "static void umount_tw_func(struct callback_head *cb)",
+               "kernel_umount.c handler guard",
+           )
+           replace(
+               "kernel_umount.c",
+               "#endif // #if defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n\n"
+               "void ksu_kernel_umount_init(void)",
+               "void ksu_kernel_umount_init(void)",
+               "kernel_umount.c handler footer",
+           )
+
+           replace(
+               "setuid_hook.c",
+               "extern void susfs_run_sus_path_loop(uid_t uid);",
+               "extern void susfs_run_sus_path_loop(void);",
+               "setuid path declaration",
+           )
+           for old in (
+               "extern void susfs_reorder_mnt_id(void);\n",
+               "extern void susfs_try_umount(uid_t uid);\n",
+               "    susfs_reorder_mnt_id();\n",
+           ):
+               replace("setuid_hook.c", old, "", "setuid deprecated declaration/call")
+           replace(
+               "setuid_hook.c",
+               "    susfs_try_umount(new_uid);",
+               "    ksu_handle_umount(old_uid, new_uid);",
+               "setuid umount handler",
+           )
+           replace(
+               "setuid_hook.c",
+               "    susfs_run_sus_path_loop(new_uid);",
+               "    susfs_run_sus_path_loop();",
+               "setuid path loop call",
+           )
+
+           replace(
+               "supercalls.c",
+               """        if (cmd == CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH) {
+            susfs_set_i_state_on_external_dir(arg);
+            return 0;
+        }
+        if (cmd == CMD_SUSFS_SET_SDCARD_ROOT_PATH) {
+            susfs_set_i_state_on_external_dir(arg);
+            return 0;
+        }
+""",
+               "",
+               "deprecated SUSFS path handlers",
+           )
+           replace(
+               "supercalls.c",
+               """#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+        if (cmd == CMD_SUSFS_ADD_TRY_UMOUNT) {
+            susfs_add_try_umount(arg);
+            return 0;
+        }
+#endif //#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+""",
+               "",
+               "deprecated SUSFS try_umount handler",
+           )
            PY
-           test "$(grep -c 'susfs_try_umount' KernelSU-Next/kernel/setuid_hook.c)" -eq 0
-           git -C KernelSU-Next apply --check --whitespace=error \
-             "$GITHUB_WORKSPACE/patches/0001-KernelSU-Next-remove-deprecated-SUSFS-command-handlers.patch"
-          git -C KernelSU-Next apply --whitespace=error \
-            "$GITHUB_WORKSPACE/patches/0001-KernelSU-Next-remove-deprecated-SUSFS-command-handlers.patch"
-          if grep -Eq \
-            'susfs_set_i_state_on_external_dir|susfs_add_try_umount' \
-            KernelSU-Next/kernel/supercalls.c; then
-            echo "deprecated SUSFS command handler remains in KernelSU-Next"
-            exit 1
-          fi
+           if grep -REq \
+             'susfs_try_umount|susfs_reorder_mnt_id|susfs_set_i_state_on_external_dir|susfs_add_try_umount' \
+             KernelSU-Next/kernel/setuid_hook.c KernelSU-Next/kernel/supercalls.c; then
+             echo "deprecated SUSFS command handler remains in KernelSU-Next"
+             exit 1
+           fi
 
       - name: Integrate SUSFS
         run: |
