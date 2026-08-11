@@ -48,6 +48,18 @@ jobs:
             | tar -xz -C prebuilts/clang/host/linux-x86/clang-r450784d
           test -x prebuilts/clang/host/linux-x86/clang-r450784d/bin/clang
 
+      - name: Check runner specs and add swap
+        run: |
+          nproc
+          free -h
+          df -h /
+          sudo fallocate -l 6G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+          df -h /
+
       - name: Integrate KernelSU Next
         working-directory: kernel_platform
         run: |
