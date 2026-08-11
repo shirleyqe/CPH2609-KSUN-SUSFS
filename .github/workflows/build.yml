@@ -42,12 +42,12 @@ jobs:
           git -C oneplus_vendor checkout \
             6ada53700a567e0b92cebebccb49b74db720f96a
           ln -s "$PWD/oneplus_vendor/vendor" vendor
-          mkdir -p prebuilts/clang/host/linux-x86/clang-r450784d
+          mkdir -p prebuilts/clang/host/linux-x86/clang-r450784e
           curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 \
             --max-time 1500 \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-qpr3-release/clang-r450784d.tar.gz \
-            | tar -xz -C prebuilts/clang/host/linux-x86/clang-r450784d
-          test -x prebuilts/clang/host/linux-x86/clang-r450784d/bin/clang
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-qpr3-release/clang-r450784e.tar.gz \
+            | tar -xz -C prebuilts/clang/host/linux-x86/clang-r450784e
+          test -x prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang
 
       - name: Check runner specs and add swap
         run: |
@@ -458,44 +458,44 @@ jobs:
           export KERNEL_DIR="$PWD/kernel_platform/common"
           export OUT_DIR="$PWD/out"
           export OUT_DIR_V1="$PWD/out-v1"
-          export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784d/bin:$PATH"
+          export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
-          # --- V2 config: stock fidelity base (OEM .config extracted from
-          #     CPH2609_14.0.0.831(EX01) boot kernel) + minimal KSUN/SUSFS.
-          #     No LTO override: stock is Full LTO, keep it.
-          #     No QCOM_SMEM override: stock leaves it off (vendor_boot dlkm).
-          #     TRIM_UNUSED_KSYMS: stock enables it, but its whitelist is a
-          #     vendor-build-machine absolute path unavailable to public
-          #     builds; disabling it yields an export superset (no module
-          #     symbol can go missing) at negligible Image size cost.
-          #     OPLUS_FEATURE_SENSOR_CFG: vendor-tree Kconfig (default y) is
-          #     absent from stock IKCONFIG - stock GKI build does not scan the
-          #     vendor tree; the driver lives in vendor dlkm and calls
-          #     qcom_smem_alloc(), which is undefined when QCOM_SMEM=n.
+          # --- V3 config: stock fidelity base = OEM .config (IKCONFIG) merged
+          #     with the official QCOM kalama_GKI.config fragment (the exact
+          #     defconfig fragment OnePlus uses for this device, all
+          #     OPLUS_* feature macros assumed true).  The fragment restores
+          #     the GKI-hidden symbols that stock .831 actually builds
+          #     (QCOM_SMEM=m, OPLUS_FEATURE_SENSOR_CFG=m,
+          #     OPLUS_FEATURE_OPROJECT=m, HORAE_THERMAL_SHELL=m, OPLUS_CHG=m,
+          #     ...).  TRIM_UNUSED_KSYMS stays off (whitelist is a vendor
+          #     build-machine absolute path unavailable publicly; export
+          #     superset, no module symbol can go missing).
           mkdir -p "$OUT_DIR"
-          tr -d '\r' < "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
-            > "$OUT_DIR/.config"
+          python3 "$GITHUB_WORKSPACE/stock-config/merge_config.py" \
+            "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
+            "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
+            "$OUT_DIR/.config"
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+            --enable KSU --enable KSU_SUSFS \
+            --disable TRIM_UNUSED_KSYMS
+          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
+          cp "$OUT_DIR/.config" "$OUT_DIR/.config.v3"
+          # --- V2 reference config: same tree/toolchain, V2 config profile,
+          #     generated here for the V2/V3 config diff artifact ---
+          mkdir -p "$OUT_DIR_V1"
+          tr -d '\r' < "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
+            > "$OUT_DIR_V1/.config"
+          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR_V1/.config" \
             --enable KSU --enable KSU_SUSFS \
             --disable OPLUS_FEATURE_OPROJECT \
             --disable TRIM_UNUSED_KSYMS \
             --disable OPLUS_FEATURE_SENSOR_CFG
-          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
-          cp "$OUT_DIR/.config" "$OUT_DIR/.config.v2"
-          # --- V1 reference config: same tree/toolchain, legacy V1 switches,
-          #     generated here for the V1/V2 config diff artifact ---
-          mkdir -p "$OUT_DIR_V1"
-          make -C "$KERNEL_DIR" O="$OUT_DIR_V1" gki_defconfig
-          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR_V1/.config" \
-            --enable KSU --enable KSU_SUSFS \
-            --disable LTO_CLANG_FULL --enable LTO_CLANG_THIN \
-            --enable QCOM_SMEM --disable OPLUS_FEATURE_OPROJECT
           make -C "$KERNEL_DIR" O="$OUT_DIR_V1" olddefconfig
-          cp "$OUT_DIR_V1/.config" "$OUT_DIR_V1/.config.v1"
-          # --- V2 build: Full LTO (stock profile) ---
+          cp "$OUT_DIR_V1/.config" "$OUT_DIR_V1/.config.v2"
+          # --- V3 build: Full LTO (stock profile) ---
           make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
           test -s "$OUT_DIR/arch/arm64/boot/Image"
           grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config"
@@ -516,11 +516,19 @@ jobs:
           grep -q '^CONFIG_IKCONFIG_PROC=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_GKI_HIDDEN_QCOM_CONFIGS=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_QCOM_SMEM_STATE=y$' "$OUT_DIR/.config"
-          grep -q '^# CONFIG_QCOM_SMEM is not set$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_QCOM_SMEM=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_OPLUS_FEATURE_SENSOR_CFG=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_HORAE_THERMAL_SHELL=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_OPLUS_CHG=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_OPLUS_SYSTEM_KERNEL=y$' "$OUT_DIR/.config"
           grep -q '^# CONFIG_TRIM_UNUSED_KSYMS is not set$' "$OUT_DIR/.config"
-          grep -q '^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$' "$OUT_DIR/.config"
+          python3 "$GITHUB_WORKSPACE/stock-config/audit_config.py" \
+            "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
+            "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
+            "$OUT_DIR/.config"
           if grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=' "$OUT_DIR/.config"; then
-            grep -q '^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=m$' "$OUT_DIR/.config"
           fi
           test -s "$OUT_DIR/vmlinux"
           test -s "$OUT_DIR/System.map"
@@ -531,36 +539,37 @@ jobs:
           grep -Eq ' [Tt] (susfs_add_sus_path|susfs_get_enabled_features)$' \
             "$OUT_DIR/System.map"
           {
-            echo "V2 Image size: $(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
+            echo "V3 Image size: $(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
             sha256sum "$OUT_DIR/arch/arm64/boot/Image"
-            echo "V2 config profile:"
+            echo "V3 config profile:"
             grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_SUS_MAP|KSU_SUSFS_SUS_KSTAT|KSU_SUSFS_SUS_MOUNT|KSU_SUSFS_TRY_UMOUNT|KSU_SUSFS_OPEN_REDIRECT|KSU_SUSFS_SPOOF_UNAME|KSU_SUSFS_ENABLE_LOG|KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS|KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG)=y$' \
               "$OUT_DIR/.config"
             grep -E '^CONFIG_(LTO|LTO_CLANG|LTO_CLANG_FULL)=y$|^# CONFIG_LTO_CLANG_THIN is not set$' \
               "$OUT_DIR/.config"
-            grep -E '^CONFIG_(IKCONFIG|IKCONFIG_PROC|GKI_HIDDEN_QCOM_CONFIGS|QCOM_SMEM_STATE)=y$|^# CONFIG_QCOM_SMEM is not set$' \
-              "$OUT_DIR/.config"
-            grep -E '^CONFIG_(OPLUS_FEATURE_STORAGE_IO_METRICS|OPLUS_FEATURE_FILE_MONITOR)=|^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' \
+            grep -E '^CONFIG_(IKCONFIG|IKCONFIG_PROC|GKI_HIDDEN_QCOM_CONFIGS|QCOM_SMEM_STATE|OPLUS_SYSTEM_KERNEL)=y$|^CONFIG_QCOM_SMEM=m$|^CONFIG_OPLUS_FEATURE_(SENSOR_CFG|OPROJECT)=m$|^CONFIG_HORAE_THERMAL_SHELL=m$|^CONFIG_OPLUS_CHG=m$' \
               "$OUT_DIR/.config"
             grep -E '^# CONFIG_TRIM_UNUSED_KSYMS is not set$|^CONFIG_UNUSED_KSYMS_WHITELIST' \
               "$OUT_DIR/.config"
-            grep -E '^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$' \
-              "$OUT_DIR/.config"
-            echo "V1 reference profile (for diff):"
-            grep -E '^CONFIG_LTO_CLANG_THIN=y$|^# CONFIG_LTO_CLANG_FULL is not set$|^CONFIG_QCOM_SMEM=y$' \
+            echo "V2 reference profile (for diff):"
+            grep -E '^# CONFIG_QCOM_SMEM is not set$|^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$|^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' \
               "$OUT_DIR_V1/.config"
             echo "vmlinux strings:"
             grep -E -i -m 20 'kernelsu|susfs' "$RUNNER_TEMP/vmlinux.strings"
             echo "System.map symbols:"
             grep -E ' [Tt] (susfs_init|susfs_add_sus_path|susfs_get_enabled_features)$' \
               "$OUT_DIR/System.map"
-            echo "New y-symbols vs stock IKCONFIG (vendor-tree extras):"
-            awk '/^CONFIG_[A-Z0-9_]+=y$/ { split($0, a, "="); print a[1] }' \
-              "$OUT_DIR/.config" | sort -u > "$RUNNER_TEMP/new_y_syms.txt"
-            awk '/^CONFIG_[A-Z0-9_]+(=| )/ { split($0, a, "CONFIG_"); split(a[2], b, /[= ]/); print "CONFIG_" b[1] }' \
-              "$GITHUB_WORKSPACE/stock-config/stock_config.txt" | sort -u \
-              > "$RUNNER_TEMP/stock_syms.txt"
-            comm -23 "$RUNNER_TEMP/new_y_syms.txt" "$RUNNER_TEMP/stock_syms.txt"
+            echo "New y/m-symbols vs stock+fragment (vendor-tree extras):"
+            awk '/^CONFIG_[A-Z0-9_]+=[ym]$/ { split($0, a, "="); print a[1] }' \
+              "$OUT_DIR/.config" | sort -u > "$RUNNER_TEMP/new_ym_syms.txt"
+            python3 "$GITHUB_WORKSPACE/stock-config/merge_config.py" \
+              "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
+              "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
+              "$RUNNER_TEMP/expect.config" > /dev/null
+            awk '/^CONFIG_[A-Z0-9_]+=[ym]$/ { split($0, a, "="); print a[1] }' \
+              "$RUNNER_TEMP/expect.config" | sort -u \
+              > "$RUNNER_TEMP/expect_ym.txt"
+            comm -23 "$RUNNER_TEMP/new_ym_syms.txt" \
+              "$RUNNER_TEMP/expect_ym.txt"
           } | tee "$OUT_DIR/verification.txt"
 
       - name: Archive verified kernel
@@ -573,8 +582,9 @@ jobs:
           path: |
             out/arch/arm64/boot/Image
             out/.config
-            out/.config.v2
+            out/.config.v3
             out/System.map
             out/vmlinux
             out/verification.txt
             out-v1/.config
+            out-v1/.config.v2
