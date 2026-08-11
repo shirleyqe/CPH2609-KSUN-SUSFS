@@ -470,13 +470,18 @@ jobs:
           #     vendor-build-machine absolute path unavailable to public
           #     builds; disabling it yields an export superset (no module
           #     symbol can go missing) at negligible Image size cost.
+          #     OPLUS_FEATURE_SENSOR_CFG: vendor-tree Kconfig (default y) is
+          #     absent from stock IKCONFIG - stock GKI build does not scan the
+          #     vendor tree; the driver lives in vendor dlkm and calls
+          #     qcom_smem_alloc(), which is undefined when QCOM_SMEM=n.
           mkdir -p "$OUT_DIR"
           tr -d '\r' < "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
             > "$OUT_DIR/.config"
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
             --enable KSU --enable KSU_SUSFS \
             --disable OPLUS_FEATURE_OPROJECT \
-            --disable TRIM_UNUSED_KSYMS
+            --disable TRIM_UNUSED_KSYMS \
+            --disable OPLUS_FEATURE_SENSOR_CFG
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
           cp "$OUT_DIR/.config" "$OUT_DIR/.config.v2"
           # --- V1 reference config: same tree/toolchain, legacy V1 switches,
@@ -512,6 +517,7 @@ jobs:
           grep -q '^CONFIG_QCOM_SMEM_STATE=y$' "$OUT_DIR/.config"
           grep -q '^# CONFIG_QCOM_SMEM is not set$' "$OUT_DIR/.config"
           grep -q '^# CONFIG_TRIM_UNUSED_KSYMS is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$' "$OUT_DIR/.config"
           if grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=' "$OUT_DIR/.config"; then
             grep -q '^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' "$OUT_DIR/.config"
           fi
@@ -537,6 +543,8 @@ jobs:
               "$OUT_DIR/.config"
             grep -E '^# CONFIG_TRIM_UNUSED_KSYMS is not set$|^CONFIG_UNUSED_KSYMS_WHITELIST' \
               "$OUT_DIR/.config"
+            grep -E '^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$' \
+              "$OUT_DIR/.config"
             echo "V1 reference profile (for diff):"
             grep -E '^CONFIG_LTO_CLANG_THIN=y$|^# CONFIG_LTO_CLANG_FULL is not set$|^CONFIG_QCOM_SMEM=y$' \
               "$OUT_DIR_V1/.config"
@@ -545,6 +553,16 @@ jobs:
             echo "System.map symbols:"
             grep -E ' [Tt] (susfs_init|susfs_add_sus_path|susfs_get_enabled_features)$' \
               "$OUT_DIR/System.map"
+            echo "New y-symbols vs stock IKCONFIG (vendor-tree extras):"
+            python3 - "$OUT_DIR/.config" "$GITHUB_WORKSPACE/stock-config/stock_config.txt" <<'PY'
+import re, sys
+new = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+stock = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+stock_syms = set(re.findall(r"^CONFIG_[A-Z0-9_]+", stock, re.M))
+for m in re.finditer(r"^(CONFIG_[A-Z0-9_]+)=y$", new, re.M):
+    if m.group(1) not in stock_syms:
+        print(m.group(1))
+PY
           } | tee "$OUT_DIR/verification.txt"
 
       - name: Archive verified kernel
