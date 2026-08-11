@@ -555,15 +555,12 @@ jobs:
             grep -E ' [Tt] (susfs_init|susfs_add_sus_path|susfs_get_enabled_features)$' \
               "$OUT_DIR/System.map"
             echo "New y-symbols vs stock IKCONFIG (vendor-tree extras):"
-            python3 - "$OUT_DIR/.config" "$GITHUB_WORKSPACE/stock-config/stock_config.txt" <<'PY'
-            import re, sys
-            new = open(sys.argv[1], encoding="utf-8", errors="replace").read()
-            stock = open(sys.argv[2], encoding="utf-8", errors="replace").read()
-            stock_syms = set(re.findall(r"^CONFIG_[A-Z0-9_]+", stock, re.M))
-            for m in re.finditer(r"^(CONFIG_[A-Z0-9_]+)=y$", new, re.M):
-                if m.group(1) not in stock_syms:
-                    print(m.group(1))
-            PY
+            awk '/^CONFIG_[A-Z0-9_]+=y$/ { split($0, a, "="); print a[1] }' \
+              "$OUT_DIR/.config" | sort -u > "$RUNNER_TEMP/new_y_syms.txt"
+            awk '/^CONFIG_[A-Z0-9_]+(=| )/ { split($0, a, "CONFIG_"); split(a[2], b, /[= ]/); print "CONFIG_" b[1] }' \
+              "$GITHUB_WORKSPACE/stock-config/stock_config.txt" | sort -u \
+              > "$RUNNER_TEMP/stock_syms.txt"
+            comm -23 "$RUNNER_TEMP/new_y_syms.txt" "$RUNNER_TEMP/stock_syms.txt"
           } | tee "$OUT_DIR/verification.txt"
 
       - name: Archive verified kernel
