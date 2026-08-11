@@ -45,7 +45,7 @@ jobs:
           mkdir -p prebuilts/clang/host/linux-x86/clang-r450784e
           curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 \
             --max-time 1500 \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-qpr3-release/clang-r450784e.tar.gz \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android14-release/clang-r450784e.tar.gz \
             | tar -xz -C prebuilts/clang/host/linux-x86/clang-r450784e
           test -x prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang
 
