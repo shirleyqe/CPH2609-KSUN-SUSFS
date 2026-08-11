@@ -1,0 +1,7 @@
+# Keep Actions workflows and Python helpers LF-only (CRLF breaks bash heredocs).
+.github/workflows/* text eol=lf
+stock-config/*.py text eol=lf
+stock-config/*.config text eol=lf
+stock-config/*.txt text eol=lf
+*.md text eol=lf
+*.patch text eol=lf

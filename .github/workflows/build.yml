@@ -48,6 +48,11 @@ jobs:
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android14-release/clang-r450784e.tar.gz \
             | tar -xz -C prebuilts/clang/host/linux-x86/clang-r450784e
           test -x prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang
+          prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang --version \
+            | tee "$RUNNER_TEMP/clang-version.txt"
+          # Must be the real r450784e package (stock .831 toolchain id), not r450784d.
+          grep -F 'r450784e' "$RUNNER_TEMP/clang-version.txt"
+          grep -E 'clang version 14\.0\.7' "$RUNNER_TEMP/clang-version.txt"
 
       - name: Check runner specs and add swap
         run: |
@@ -463,21 +468,24 @@ jobs:
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
-          # --- V3 config: stock fidelity base = OEM .config (IKCONFIG) merged
-          #     with the official QCOM kalama_GKI.config fragment (the exact
-          #     defconfig fragment OnePlus uses for this device, all
-          #     OPLUS_* feature macros assumed true).  The fragment restores
-          #     the GKI-hidden symbols that stock .831 actually builds
-          #     (QCOM_SMEM=m, OPLUS_FEATURE_SENSOR_CFG=m,
-          #     OPLUS_FEATURE_OPROJECT=m, HORAE_THERMAL_SHELL=m, OPLUS_CHG=m,
-          #     ...).  TRIM_UNUSED_KSYMS stays off (whitelist is a vendor
-          #     build-machine absolute path unavailable publicly; export
-          #     superset, no module symbol can go missing).
+          # --- V3 config: stock IKCONFIG base + official kalama_GKI.config
+          #     fragment with strict Kconfig line parsing / OPLUS_* ifdef
+          #     bodies kept (device macros true).  Comment-lookalike fragment
+          #     lines such as '# CONFIG_ZRAM=m' are NOT overrides.  Fragment
+          #     restores GKI-hidden stock-fidelity symbols (QCOM_SMEM=m,
+          #     OPLUS_FEATURE_SENSOR_CFG=m, OPLUS_FEATURE_OPROJECT=m,
+          #     HORAE_THERMAL_SHELL=m, OPLUS_CHG=m, ...).  KSUN/SUSFS are the
+          #     only intentional adds; TRIM_UNUSED_KSYMS stays off (vendor
+          #     whitelist path unavailable publicly -> export superset).
           mkdir -p "$OUT_DIR"
           python3 "$GITHUB_WORKSPACE/stock-config/merge_config.py" \
             "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
             "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
             "$OUT_DIR/.config"
+          # Pre-olddefconfig sanity: stock ZRAM must survive fragment merge.
+          grep -q '^CONFIG_ZRAM=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_ZSMALLOC=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_QCOM_SMEM=m$' "$OUT_DIR/.config"
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
             --enable KSU --enable KSU_SUSFS \
             --disable TRIM_UNUSED_KSYMS
@@ -523,6 +531,15 @@ jobs:
           grep -q '^CONFIG_OPLUS_CHG=m$' "$OUT_DIR/.config"
           grep -q '^CONFIG_OPLUS_SYSTEM_KERNEL=y$' "$OUT_DIR/.config"
           grep -q '^# CONFIG_TRIM_UNUSED_KSYMS is not set$' "$OUT_DIR/.config"
+          # Stock ZRAM/ZSMALLOC must remain after olddefconfig (fragment has
+          # commented '# CONFIG_ZRAM=m' lines that must NOT disable them).
+          grep -q '^CONFIG_ZRAM=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_ZSMALLOC=m$' "$OUT_DIR/.config"
+          # Critical QCOM storage / smem / phy chain from official fragment.
+          grep -q '^CONFIG_SCSI_UFS_QCOM=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_PHY_QCOM_UFS=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_PHY_QCOM_UFS_V4=m$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_RPMSG_QCOM_GLINK_SMEM=m$' "$OUT_DIR/.config"
           python3 "$GITHUB_WORKSPACE/stock-config/audit_config.py" \
             "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
             "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
@@ -532,21 +549,39 @@ jobs:
           fi
           test -s "$OUT_DIR/vmlinux"
           test -s "$OUT_DIR/System.map"
+          # Image-only build still emits vmlinux.symvers via modpost; expose
+          # it as Module.symvers for vendor CRC compares.
+          if [ -s "$OUT_DIR/Module.symvers" ]; then
+            :
+          elif [ -s "$OUT_DIR/vmlinux.symvers" ]; then
+            cp -f "$OUT_DIR/vmlinux.symvers" "$OUT_DIR/Module.symvers"
+          else
+            echo "missing Module.symvers/vmlinux.symvers" >&2
+            exit 1
+          fi
+          test -s "$OUT_DIR/Module.symvers"
           strings "$OUT_DIR/vmlinux" > "$RUNNER_TEMP/vmlinux.strings"
           grep -q KernelSU "$RUNNER_TEMP/vmlinux.strings"
           grep -qi SUSFS "$RUNNER_TEMP/vmlinux.strings"
           grep -Eq ' [Tt] susfs_init$' "$OUT_DIR/System.map"
           grep -Eq ' [Tt] (susfs_add_sus_path|susfs_get_enabled_features)$' \
             "$OUT_DIR/System.map"
+          CLANG_PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang"
+          CLANG_VER="$("$CLANG_PATH" --version | tr '\n' ' ')"
+          IMAGE_SIZE="$(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
+          IMAGE_SHA="$(sha256sum "$OUT_DIR/arch/arm64/boot/Image" | awk '{print $1}')"
           {
-            echo "V3 Image size: $(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
-            sha256sum "$OUT_DIR/arch/arm64/boot/Image"
+            echo "V3 Image size: $IMAGE_SIZE"
+            echo "$IMAGE_SHA  $OUT_DIR/arch/arm64/boot/Image"
+            echo "clang: $CLANG_VER"
             echo "V3 config profile:"
             grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_SUS_MAP|KSU_SUSFS_SUS_KSTAT|KSU_SUSFS_SUS_MOUNT|KSU_SUSFS_TRY_UMOUNT|KSU_SUSFS_OPEN_REDIRECT|KSU_SUSFS_SPOOF_UNAME|KSU_SUSFS_ENABLE_LOG|KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS|KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG)=y$' \
               "$OUT_DIR/.config"
             grep -E '^CONFIG_(LTO|LTO_CLANG|LTO_CLANG_FULL)=y$|^# CONFIG_LTO_CLANG_THIN is not set$' \
               "$OUT_DIR/.config"
-            grep -E '^CONFIG_(IKCONFIG|IKCONFIG_PROC|GKI_HIDDEN_QCOM_CONFIGS|QCOM_SMEM_STATE|OPLUS_SYSTEM_KERNEL)=y$|^CONFIG_QCOM_SMEM=m$|^CONFIG_OPLUS_FEATURE_(SENSOR_CFG|OPROJECT)=m$|^CONFIG_HORAE_THERMAL_SHELL=m$|^CONFIG_OPLUS_CHG=m$' \
+            grep -E '^CONFIG_(IKCONFIG|IKCONFIG_PROC|GKI_HIDDEN_QCOM_CONFIGS|QCOM_SMEM_STATE|OPLUS_SYSTEM_KERNEL)=y$|^CONFIG_QCOM_SMEM=m$|^CONFIG_OPLUS_FEATURE_(SENSOR_CFG|OPROJECT)=m$|^CONFIG_HORAE_THERMAL_SHELL=m$|^CONFIG_OPLUS_CHG=m$|^CONFIG_ZRAM=m$|^CONFIG_ZSMALLOC=m$' \
+              "$OUT_DIR/.config"
+            grep -E '^CONFIG_(SCSI_UFS_QCOM|PHY_QCOM_UFS|PHY_QCOM_UFS_V4|RPMSG_QCOM_GLINK_SMEM)=m$' \
               "$OUT_DIR/.config"
             grep -E '^# CONFIG_TRIM_UNUSED_KSYMS is not set$|^CONFIG_UNUSED_KSYMS_WHITELIST' \
               "$OUT_DIR/.config"
@@ -571,6 +606,25 @@ jobs:
             comm -23 "$RUNNER_TEMP/new_ym_syms.txt" \
               "$RUNNER_TEMP/expect_ym.txt"
           } | tee "$OUT_DIR/verification.txt"
+          {
+            echo "variant=V3"
+            echo "device=CPH2609"
+            echo "firmware=CPH2609_14.0.0.831(EX01)"
+            echo "kernel_tree=OnePlusOSS/android_kernel_oneplus_sm8550@ce4627cedf3e4aac93ad0b369f623efa057707fe"
+            echo "vendor_tree=OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8550@6ada53700a567e0b92cebebccb49b74db720f96a"
+            echo "ksun=v3.1.0-legacy-susfs@ba4422f0556e10f40dda1887631d87a18ede4ec5"
+            echo "config_base=stock-config/stock_config.txt (OEM IKCONFIG)"
+            echo "config_fragment=stock-config/kalama_GKI.config (strict merge, OPLUS ifdef bodies kept)"
+            echo "config_delta=KSU=y KSU_SUSFS=y TRIM_UNUSED_KSYMS=n"
+            echo "lto=full"
+            echo "clang_path=$CLANG_PATH"
+            echo "clang_version=$CLANG_VER"
+            echo "image_size=$IMAGE_SIZE"
+            echo "image_sha256=$IMAGE_SHA"
+            echo "git_commit=${GITHUB_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_url=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } | tee "$OUT_DIR/provenance.txt"
 
       - name: Archive verified kernel
         uses: actions/upload-artifact@v4
@@ -584,7 +638,9 @@ jobs:
             out/.config
             out/.config.v3
             out/System.map
+            out/Module.symvers
             out/vmlinux
             out/verification.txt
+            out/provenance.txt
             out-v1/.config
             out-v1/.config.v2
