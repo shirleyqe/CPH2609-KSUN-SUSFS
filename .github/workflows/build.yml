@@ -462,22 +462,35 @@ jobs:
         run: |
           export KERNEL_DIR="$PWD/kernel_platform/common"
           export OUT_DIR="$PWD/out"
+          export OUT_DIR_V3="$PWD/out-v3"
           export OUT_DIR_V1="$PWD/out-v1"
           export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
-          # --- V3 config: stock IKCONFIG base + official kalama_GKI.config
-          #     fragment with strict Kconfig line parsing / OPLUS_* ifdef
-          #     bodies kept (device macros true).  Comment-lookalike fragment
-          #     lines such as '# CONFIG_ZRAM=m' are NOT overrides.  Fragment
-          #     restores GKI-hidden stock-fidelity symbols (QCOM_SMEM=m,
-          #     OPLUS_FEATURE_SENSOR_CFG=m, OPLUS_FEATURE_OPROJECT=m,
-          #     HORAE_THERMAL_SHELL=m, OPLUS_CHG=m, ...).  KSUN/SUSFS are the
-          #     only intentional adds; TRIM_UNUSED_KSYMS stays off (vendor
-          #     whitelist path unavailable publicly -> export superset).
-          mkdir -p "$OUT_DIR"
+          # --- V4-A config: stock IKCONFIG base + official kalama_GKI.config
+          #     fragment (strict merge, OPLUS_* ifdef bodies kept) + the V3
+          #     delta (KSU/KSU_SUSFS=y, TRIM_UNUSED_KSYMS=n).  The SINGLE
+          #     experiment variable vs V3: disable the four QTI panic-on
+          #     switches that the fragment sets =y while the stock .831
+          #     kernel does not enable them at all:
+          #       CONFIG_QCOM_PANIC_ON_NOTIF_TIMEOUT
+          #       CONFIG_QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT
+          #       CONFIG_QCOM_FORCE_WDOG_BITE_ON_PANIC
+          #       CONFIG_EDAC_QCOM_LLCC_PANIC_ON_UE
+          #     Kconfig note (pinned tree): PDR_NOTIF_TIMEOUT has no
+          #     depends; FORCE_WDOG_BITE_ON_PANIC depends only on
+          #     QCOM_WDT_CORE(=m, kept); EDAC_QCOM_LLCC_PANIC_ON_UE depends
+          #     only on EDAC_QCOM(=m, kept); QCOM_WDOG_BITE_EARLY_PANIC
+          #     (depends on FORCE_WDOG_BITE) is already 'not set' in V3 so no
+          #     cascade is expected.  Any collateral change is caught by the
+          #     strict V3 vs V4-A config diff below.
+          #     A V3 reference config is generated in out-v3 from the same
+          #     tree/run so the diff is produced in one identical
+          #     environment (and out-v3/.config must match the real V3
+          #     run-31465846675 .config byte-for-byte).
+          mkdir -p "$OUT_DIR" "$OUT_DIR_V3" "$OUT_DIR_V1"
           python3 "$GITHUB_WORKSPACE/stock-config/merge_config.py" \
             "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
             "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
@@ -486,11 +499,46 @@ jobs:
           grep -q '^CONFIG_ZRAM=m$' "$OUT_DIR/.config"
           grep -q '^CONFIG_ZSMALLOC=m$' "$OUT_DIR/.config"
           grep -q '^CONFIG_QCOM_SMEM=m$' "$OUT_DIR/.config"
-          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+          # --- V3 reference config (control): same merge, NO panic-on
+          #     disables.  Used for the strict V3 vs V4-A config diff.
+          cp "$OUT_DIR/.config" "$OUT_DIR_V3/.config"
+          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR_V3/.config" \
             --enable KSU --enable KSU_SUSFS \
             --disable TRIM_UNUSED_KSYMS
+          make -C "$KERNEL_DIR" O="$OUT_DIR_V3" olddefconfig
+          cp "$OUT_DIR_V3/.config" "$OUT_DIR/.config.v3"
+          # --- V4-A experiment config: V3 profile + 4 panic-on disables.
+          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+            --enable KSU --enable KSU_SUSFS \
+            --disable TRIM_UNUSED_KSYMS \
+            --disable QCOM_PANIC_ON_NOTIF_TIMEOUT \
+            --disable QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT \
+            --disable QCOM_FORCE_WDOG_BITE_ON_PANIC \
+            --disable EDAC_QCOM_LLCC_PANIC_ON_UE
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
-          cp "$OUT_DIR/.config" "$OUT_DIR/.config.v3"
+          cp "$OUT_DIR/.config" "$OUT_DIR/.config.v4a"
+          # --- Post-olddefconfig assertions: all four are NOT set in V4-A
+          #     and stay =y in the V3 reference (single-variable proof).
+          for sym in \
+            QCOM_PANIC_ON_NOTIF_TIMEOUT \
+            QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT \
+            QCOM_FORCE_WDOG_BITE_ON_PANIC \
+            EDAC_QCOM_LLCC_PANIC_ON_UE; do
+            grep -q "^# CONFIG_${sym} is not set$" "$OUT_DIR/.config"
+            grep -q "^CONFIG_${sym}=y$" "$OUT_DIR_V3/.config"
+          done
+          # --- Strict V3 vs V4-A config diff: after removing the four
+          #     panic-on switches (and diff headers), nothing may differ.
+          diff -u "$OUT_DIR_V3/.config" "$OUT_DIR/.config" \
+            | grep -v -E '^[+-]# CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE) is not set$' \
+            | grep -v -E '^[+-]CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE)=y$' \
+            | grep -v -E '^( |---|\+\+\+|@@|\\ No newline|$)' \
+            > "$RUNNER_TEMP/v3_vs_v4a_residual.diff" || true
+          if [ -s "$RUNNER_TEMP/v3_vs_v4a_residual.diff" ]; then
+            echo "V3 vs V4-A config diff is wider than the 4 panic-on symbols:"
+            cat "$RUNNER_TEMP/v3_vs_v4a_residual.diff"
+            exit 1
+          fi
           # --- V2 reference config: same tree/toolchain, V2 config profile,
           #     generated here for the V2/V3 config diff artifact ---
           mkdir -p "$OUT_DIR_V1"
@@ -503,7 +551,7 @@ jobs:
             --disable OPLUS_FEATURE_SENSOR_CFG
           make -C "$KERNEL_DIR" O="$OUT_DIR_V1" olddefconfig
           cp "$OUT_DIR_V1/.config" "$OUT_DIR_V1/.config.v2"
-          # --- V3 build: Full LTO (stock profile) ---
+          # --- V4-A build: Full LTO (stock profile) ---
           make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
           test -s "$OUT_DIR/arch/arm64/boot/Image"
           grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config"
@@ -541,6 +589,10 @@ jobs:
           grep -q '^CONFIG_PHY_QCOM_UFS_V4=m$' "$OUT_DIR/.config"
           grep -q '^CONFIG_RPMSG_QCOM_GLINK_SMEM=m$' "$OUT_DIR/.config"
           python3 "$GITHUB_WORKSPACE/stock-config/audit_config.py" \
+            --allow CONFIG_QCOM_PANIC_ON_NOTIF_TIMEOUT \
+            --allow CONFIG_QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT \
+            --allow CONFIG_QCOM_FORCE_WDOG_BITE_ON_PANIC \
+            --allow CONFIG_EDAC_QCOM_LLCC_PANIC_ON_UE \
             "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
             "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
             "$OUT_DIR/.config"
@@ -571,10 +623,10 @@ jobs:
           IMAGE_SIZE="$(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
           IMAGE_SHA="$(sha256sum "$OUT_DIR/arch/arm64/boot/Image" | awk '{print $1}')"
           {
-            echo "V3 Image size: $IMAGE_SIZE"
+            echo "V4-A Image size: $IMAGE_SIZE"
             echo "$IMAGE_SHA  $OUT_DIR/arch/arm64/boot/Image"
             echo "clang: $CLANG_VER"
-            echo "V3 config profile:"
+            echo "V4-A config profile:"
             grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_SUS_MAP|KSU_SUSFS_SUS_KSTAT|KSU_SUSFS_SUS_MOUNT|KSU_SUSFS_TRY_UMOUNT|KSU_SUSFS_OPEN_REDIRECT|KSU_SUSFS_SPOOF_UNAME|KSU_SUSFS_ENABLE_LOG|KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS|KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG)=y$' \
               "$OUT_DIR/.config"
             grep -E '^CONFIG_(LTO|LTO_CLANG|LTO_CLANG_FULL)=y$|^# CONFIG_LTO_CLANG_THIN is not set$' \
@@ -585,6 +637,14 @@ jobs:
               "$OUT_DIR/.config"
             grep -E '^# CONFIG_TRIM_UNUSED_KSYMS is not set$|^CONFIG_UNUSED_KSYMS_WHITELIST' \
               "$OUT_DIR/.config"
+            echo "V4-A experiment variable (4 QTI panic-on switches, all NOT set):"
+            grep -E '^# CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE) is not set$' \
+              "$OUT_DIR/.config"
+            echo "V3 reference config (same run, control) - same 4 switches, all y:"
+            grep -E '^CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE)=y$' \
+              "$OUT_DIR_V3/.config"
+            echo "V3 vs V4-A config diff (must be exactly the 4 switches):"
+            diff "$OUT_DIR_V3/.config" "$OUT_DIR/.config" | grep -E '^[<>]' || true
             echo "V2 reference profile (for diff):"
             grep -E '^# CONFIG_QCOM_SMEM is not set$|^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$|^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' \
               "$OUT_DIR_V1/.config"
@@ -607,7 +667,7 @@ jobs:
               "$RUNNER_TEMP/expect_ym.txt"
           } | tee "$OUT_DIR/verification.txt"
           {
-            echo "variant=V3"
+            echo "variant=V4-A"
             echo "device=CPH2609"
             echo "firmware=CPH2609_14.0.0.831(EX01)"
             echo "kernel_tree=OnePlusOSS/android_kernel_oneplus_sm8550@ce4627cedf3e4aac93ad0b369f623efa057707fe"
@@ -616,6 +676,8 @@ jobs:
             echo "config_base=stock-config/stock_config.txt (OEM IKCONFIG)"
             echo "config_fragment=stock-config/kalama_GKI.config (strict merge, OPLUS ifdef bodies kept)"
             echo "config_delta=KSU=y KSU_SUSFS=y TRIM_UNUSED_KSYMS=n"
+            echo "v4a_disable=QCOM_PANIC_ON_NOTIF_TIMEOUT=n QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT=n QCOM_FORCE_WDOG_BITE_ON_PANIC=n EDAC_QCOM_LLCC_PANIC_ON_UE=n (single experiment variable vs V3)"
+            echo "v4a_audit_allow=CONFIG_QCOM_PANIC_ON_NOTIF_TIMEOUT CONFIG_QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT CONFIG_QCOM_FORCE_WDOG_BITE_ON_PANIC CONFIG_EDAC_QCOM_LLCC_PANIC_ON_UE"
             echo "lto=full"
             echo "clang_path=$CLANG_PATH"
             echo "clang_version=$CLANG_VER"
@@ -636,6 +698,7 @@ jobs:
           path: |
             out/arch/arm64/boot/Image
             out/.config
+            out/.config.v4a
             out/.config.v3
             out/System.map
             out/Module.symvers
