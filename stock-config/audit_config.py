@@ -14,17 +14,28 @@ Failure policy (real regressions only):
   - host/toolchain noise whitelisted (CC_CAN_LINK*, PAHOLE_VERSION, ...)
   - KSU* and TRIM_UNUSED_KSYMS family whitelisted (intentional deltas)
 
+V4-A experiment: --allow CONFIG_<sym> adds an exact-symbol whitelist entry.
+The workflow passes exactly the four QTI panic-on switches that the fragment
+sets =y and V4-A deliberately disables as its single experiment variable
+(QCOM_PANIC_ON_NOTIF_TIMEOUT, QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT,
+QCOM_FORCE_WDOG_BITE_ON_PANIC, EDAC_QCOM_LLCC_PANIC_ON_UE). The whitelist is
+scoped per invocation (no global broadening); any other deviation from
+stock+fragment still fails.
+
 Dep-resolution n->m/y (fragment pulls in select/depends) is printed as DIFF
 but does not fail.
 """
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 
-STOCK = sys.argv[1]
-FRAG = sys.argv[2]
-FINAL = sys.argv[3]
+RE_ASSIGN = re.compile(r"^(CONFIG_[A-Za-z0-9_]+)=(.*)$")
+RE_UNSET = re.compile(r"^# (CONFIG_[A-Za-z0-9_]+) is not set$")
+RE_IF = re.compile(r"^\s*#\s*if(n?def)?\b")
+RE_ENDIF = re.compile(r"^\s*#\s*endif\b")
+RE_ELSE = re.compile(r"^\s*#\s*else\b")
 
 WHITELIST_PREFIXES = ("CONFIG_KSU",)
 WHITELIST_EXACT = {
@@ -116,6 +127,27 @@ def is_whitelisted(sym: str) -> bool:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--allow",
+        action="append",
+        default=[],
+        metavar="CONFIG_SYM",
+        help="exact symbol whitelist for this invocation (repeatable); "
+        "used for the V4-A panic-on experiment variable only",
+    )
+    parser.add_argument("stock")
+    parser.add_argument("frag")
+    parser.add_argument("final")
+    args = parser.parse_args()
+    extra_allow = set(args.allow)
+    if extra_allow:
+        unknown = sorted(s for s in extra_allow if not s.startswith("CONFIG_"))
+        if unknown:
+            parser.error("--allow entries must be CONFIG_ symbols: %s"
+                         % ", ".join(unknown))
+    STOCK, FRAG, FINAL = args.stock, args.frag, args.final
+
     stock = parse_map(STOCK)
     frag = parse_map(FRAG)
     # Expectation = stock then fragment overrides (including explicit n).
@@ -128,7 +160,7 @@ def main() -> None:
     warns = 0
     diffs = 0
     for sym in sorted(expect):
-        if is_whitelisted(sym):
+        if is_whitelisted(sym) or sym in extra_allow:
             continue
         want = expect[sym]
         got = final.get(sym)
