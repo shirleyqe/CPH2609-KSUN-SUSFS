@@ -482,10 +482,13 @@ jobs:
           #     Kconfig note (pinned tree): PDR_NOTIF_TIMEOUT has no
           #     depends; FORCE_WDOG_BITE_ON_PANIC depends only on
           #     QCOM_WDT_CORE(=m, kept); EDAC_QCOM_LLCC_PANIC_ON_UE depends
-          #     only on EDAC_QCOM(=m, kept); QCOM_WDOG_BITE_EARLY_PANIC
-          #     (depends on FORCE_WDOG_BITE) is already 'not set' in V3 so no
-          #     cascade is expected.  Any collateral change is caught by the
-          #     strict V3 vs V4-A config diff below.
+          #     only on EDAC_QCOM(=m, kept).  QCOM_WDOG_BITE_EARLY_PANIC
+          #     depends on FORCE_WDOG_BITE_ON_PANIC: it is 'not set' in V3,
+          #     and once FORCE_WDOG_BITE_ON_PANIC=n its dependency is
+          #     unsatisfiable so Kconfig omits its line from the V4-A .config
+          #     (effective value stays n - no behavioral delta).  That
+          #     line-drop is allowed explicitly below; any other collateral
+          #     change is caught by the strict V3 vs V4-A config diff.
           #     A V3 reference config is generated in out-v3 from the same
           #     tree/run so the diff is produced in one identical
           #     environment (and out-v3/.config must match the real V3
@@ -519,6 +522,8 @@ jobs:
           cp "$OUT_DIR/.config" "$OUT_DIR/.config.v4a"
           # --- Post-olddefconfig assertions: all four are NOT set in V4-A
           #     and stay =y in the V3 reference (single-variable proof).
+          #     QCOM_WDOG_BITE_EARLY_PANIC (depends on FORCE_WDOG_BITE_ON_PANIC)
+          #     drops out of V4-A .config entirely (n in both, no delta).
           for sym in \
             QCOM_PANIC_ON_NOTIF_TIMEOUT \
             QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT \
@@ -527,11 +532,19 @@ jobs:
             grep -q "^# CONFIG_${sym} is not set$" "$OUT_DIR/.config"
             grep -q "^CONFIG_${sym}=y$" "$OUT_DIR_V3/.config"
           done
+          grep -q '^# CONFIG_QCOM_WDOG_BITE_EARLY_PANIC is not set$' \
+            "$OUT_DIR_V3/.config"
+          if grep -q '^CONFIG_QCOM_WDOG_BITE_EARLY_PANIC' "$OUT_DIR/.config"; then
+            echo "QCOM_WDOG_BITE_EARLY_PANIC must be absent from V4-A .config"
+            exit 1
+          fi
           # --- Strict V3 vs V4-A config diff: after removing the four
-          #     panic-on switches (and diff headers), nothing may differ.
+          #     panic-on switches, the QCOM_WDOG_BITE_EARLY_PANIC line-drop
+          #     (and diff headers/context), nothing may differ.
           diff -u "$OUT_DIR_V3/.config" "$OUT_DIR/.config" \
             | grep -v -E '^[+-]# CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE) is not set$' \
             | grep -v -E '^[+-]CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE)=y$' \
+            | grep -v -E '^[-]# CONFIG_QCOM_WDOG_BITE_EARLY_PANIC is not set$' \
             | grep -v -E '^( |---|\+\+\+|@@|\\ No newline|$)' \
             > "$RUNNER_TEMP/v3_vs_v4a_residual.diff" || true
           if [ -s "$RUNNER_TEMP/v3_vs_v4a_residual.diff" ]; then
@@ -640,11 +653,19 @@ jobs:
             echo "V4-A experiment variable (4 QTI panic-on switches, all NOT set):"
             grep -E '^# CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE) is not set$' \
               "$OUT_DIR/.config"
+            echo "V4-A: QCOM_WDOG_BITE_EARLY_PANIC line dropped (depends FORCE_WDOG_BITE, n in both):"
+            if grep -q '^CONFIG_QCOM_WDOG_BITE_EARLY_PANIC' "$OUT_DIR/.config"; then
+              echo "unexpected: symbol present in V4-A .config"
+              exit 1
+            fi
             echo "V3 reference config (same run, control) - same 4 switches, all y:"
             grep -E '^CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE)=y$' \
               "$OUT_DIR_V3/.config"
-            echo "V3 vs V4-A config diff (must be exactly the 4 switches):"
-            diff "$OUT_DIR_V3/.config" "$OUT_DIR/.config" | grep -E '^[<>]' || true
+            echo "V3 vs V4-A config diff (must be the 4 switches + early-panic drop):"
+            diff "$OUT_DIR_V3/.config" "$OUT_DIR/.config" \
+              | grep -E '^[<>]' \
+              | grep -v '^< # CONFIG_QCOM_WDOG_BITE_EARLY_PANIC is not set$' \
+              || true
             echo "V2 reference profile (for diff):"
             grep -E '^# CONFIG_QCOM_SMEM is not set$|^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$|^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' \
               "$OUT_DIR_V1/.config"
