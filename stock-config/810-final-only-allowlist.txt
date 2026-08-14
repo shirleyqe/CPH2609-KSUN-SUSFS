@@ -1,0 +1,36 @@
+# 810-CONTROL final-only allowlist.
+#
+# Entries: `CONFIG_X=value` asserts the EXACT value the final .config must
+# carry (mismatch -> FAIL), `CONFIG_X` allows any y/m. Hashes start comments.
+# A symbol listed here is approved to deviate from the stock .810 IKCONFIG
+# base: it is either the documented 810-CONTROL link fix (SENSOR_CFG=n) or a
+# vendor-tree Kconfig `default y/m` that the .810 vendor tree (pinned
+# 6ada53700a567e0b92cebebccb49b74db720f96a) turns on wholesale when the stock
+# GKI Image config is regenerated with olddefconfig. Stock .810 ships these
+# vendor features as vendor_dlkm MODULES built from a separate config, so they
+# are absent from the Image IKCONFIG; keeping the vendor defaults (minus the
+# link-failing one) is the minimal, evidence-based stance (no blanket disable).
+CONFIG_CC_HAS_AUTO_VAR_INIT_ZERO_BARE=y   # toolchain probe (auto-var-init feature bit
+     # of clang r450784e); no kernel code, benign noise.
+CONFIG_OPLUS_SYSTEM_KERNEL=y   # drivers/soc/Kconfig:27 bool default y; vendor umbrella
+     # enabling the oplus SoC drivers currently built in CONTROL Image.
+CONFIG_OPLUS_SYSTEM_KERNEL_QCOM=y   # <kernel>/Kconfig:8 bool default y; qcom vs mtk
+     # platform discriminator of the above umbrella; stock .810 was qcom.
+CONFIG_OPLUS_FEATURE_PERFORMANCE_SCHED=y   # vendor/oplus/kernel/cpu/sched/Kconfig:4
+     # bool default y; sched feature (sched_assist etc. stay =n by default).
+CONFIG_OPLUS_FEATURE_PERFORMANCE_MM=y   # vendor/oplus/kernel/mm/Kconfig:4 bool default y.
+CONFIG_DYNAMIC_TUNING_SWAPPINESS=y   # vendor/oplus/kernel/mm/Kconfig:69 bool default y
+     # (kswapd file-page tuning knob; kconfig default from .810 vendor tree).
+CONFIG_HORAE_THERMAL_SHELL=y   # vendor/oplus/kernel/cpu/thermal/Kconfig:5 tristate
+     # default y; builtin in CONTROL (stock GKI Image did not include it).
+CONFIG_OPLUS_FEATURE_WINDOW_POLICY=y   # kernel/sched/walt/Kconfig:48 bool default y
+     # (walt window history policy, enabled when SCHED_WALT is on, as in stock).
+CONFIG_OPLUS_CHG=m   # drivers/power/Kconfig:6 tristate default m; oplus charging
+     # framework as module (stock ships oplus_charge as vendor module too).
+CONFIG_OPLUS_FEATURE_SENSOR_CFG=n   # 810-CONTROL LINK FIX (run 31771174569): vendor
+     # sensor Kconfig has `tristate default y`; olddefconfig on the stock .810
+     # GKI IKCONFIG base (no such symbol, =n) turns it builtin=y and
+     # oplus_sensor_devinfo.c then needs qcom_smem_alloc (CONFIG_QCOM_SMEM=n
+     # in stock) and get_project (module-only export, oplus_project.ko) ->
+     # Image link failure. Forced n by build-810-control.yml after olddefconfig;
+     # this entry asserts it stays n (regression -> FAIL).

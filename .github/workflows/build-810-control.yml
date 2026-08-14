@@ -92,6 +92,19 @@ jobs:
             --disable TRIM_UNUSED_KSYMS \
             --undefine UNUSED_KSYMS_WHITELIST
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
+          # 810-CONTROL link fix (root cause of run 31771174569): vendor
+          # sensor Kconfig has `OPLUS_FEATURE_SENSOR_CFG tristate default y`.
+          # olddefconfig on the stock .810 IKCONFIG base (which has NO such
+          # symbol, i.e. =n) turns it builtin=y, and
+          # drivers/soc/oplus/sensor/oplus_sensor_devinfo.c then references
+          # qcom_smem_alloc (CONFIG_QCOM_SMEM=n in stock) and get_project
+          # (exported only by the oplus_project.ko module) -> Image link
+          # failure. Forcing it off restores the stock state exactly (no
+          # builtin, no module).
+          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+            --disable OPLUS_FEATURE_SENSOR_CFG
+          # Gate: the fix must be present in the config actually built.
+          grep -q '^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$' "$OUT_DIR/.config"
           cp "$OUT_DIR/.config" "$OUT_DIR/.config.control"
           # Gate: KernelSU/SUSFS must be complete absent.
           if grep -q '^CONFIG_KSU' "$OUT_DIR/.config"; then
@@ -103,6 +116,7 @@ jobs:
           # Audit against the stock expectation (empty fragment => stock alone).
           : > "$RUNNER_TEMP/empty_frag.config"
           python3 "$GITHUB_WORKSPACE/stock-config/audit_config.py" \
+            --allow-new "$GITHUB_WORKSPACE/stock-config/810-final-only-allowlist.txt" \
             "$GITHUB_WORKSPACE/stock-config/stock_config_810.txt" \
             "$RUNNER_TEMP/empty_frag.config" \
             "$OUT_DIR/.config" | tee "$OUT_DIR/config-audit.txt"
@@ -139,7 +153,7 @@ jobs:
             echo "ksun=none (CONTROL: no KernelSU, no SUSFS)"
             echo "config_base=stock-config/stock_config_810.txt (.810 OEM IKCONFIG)"
             echo "config_fragment=none (empty; NOT kalama_GKI.config)"
-            echo "config_delta=TRIM_UNUSED_KSYMS=n (stock whitelist is private jenkins path)"
+            echo "config_delta=TRIM_UNUSED_KSYMS=n (stock whitelist is private jenkins path); OPLUS_FEATURE_SENSOR_CFG forced n (link fix, see workflow comment)"
             echo "lto=full"
             echo "clang_path=$CLANG_PATH"
             echo "clang_version=$CLANG_VER"

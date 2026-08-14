@@ -22,6 +22,14 @@ QCOM_FORCE_WDOG_BITE_ON_PANIC, EDAC_QCOM_LLCC_PANIC_ON_UE). The whitelist is
 scoped per invocation (no global broadening); any other deviation from
 stock+fragment still fails.
 
+Final-only detection (--allow-new FILE): symbols present in the final config
+as y/m (or asserted exact value) that are entirely absent from stock+fragment
+are normally unexpected drift; with --allow-new, every such symbol must be
+listed (CONFIG_X=value asserts the exact final value, CONFIG_X allows any
+y/m) and is then printed as NEW (informational). Without --allow-new the
+final-only y/m symbols are WARNed only (backward compatible), but the
+810-CONTROL workflow passes the allowlist so regressions are hard failures.
+
 Dep-resolution n->m/y (fragment pulls in select/depends) is printed as DIFF
 but does not fail.
 """
@@ -136,6 +144,14 @@ def main() -> None:
         help="exact symbol whitelist for this invocation (repeatable); "
         "used for the V4-A panic-on experiment variable only",
     )
+    parser.add_argument(
+        "--allow-new",
+        metavar="FILE",
+        default=None,
+        help="allowlist for final-only symbols (absent from stock+fragment); "
+        "lines: 'CONFIG_X=value' asserts exact final value, 'CONFIG_X' allows "
+        "any y/m, '#' comments; unlisted final-only y/m becomes a FAIL",
+    )
     parser.add_argument("stock")
     parser.add_argument("frag")
     parser.add_argument("final")
@@ -146,6 +162,28 @@ def main() -> None:
         if unknown:
             parser.error("--allow entries must be CONFIG_ symbols: %s"
                          % ", ".join(unknown))
+    allow_new: dict[str, str | None] = {}
+    allow_new_given = args.allow_new is not None
+    if allow_new_given:
+        for raw in open(args.allow_new, encoding="utf-8", errors="replace"):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = RE_ASSIGN.match(line)
+            if m:
+                allow_new[m.group(1)] = m.group(2).split("#", 1)[0].strip()
+                continue
+            m = RE_UNSET.match(line)
+            if m:
+                allow_new[m.group(1)] = "n"
+                continue
+            if line.startswith("CONFIG_"):
+                allow_new[line] = None  # any y/m accepted
+                continue
+            parser.error("--allow-new %s: unparsable line: %s"
+                         % (args.allow_new, line))
+        if not allow_new:
+            parser.error("--allow-new %s: no entries parsed" % args.allow_new)
     STOCK, FRAG, FINAL = args.stock, args.frag, args.final
 
     stock = parse_map(STOCK)
@@ -186,6 +224,43 @@ def main() -> None:
                 issues += 1
         # n->y/m or value noise: informational DIFF only
         print("%-4s %-55s expect=%s final=%s" % (tag, sym, want, got))
+
+    # Final-only detection: y/m (or n asserted via allowlist) symbols that
+    # stock+fragment does not mention at all.
+    # Asserted-n allowlist entries: must stay n.
+    for sym in sorted(allow_new):
+        want = allow_new[sym]
+        if want != "n":
+            continue
+        got = final.get(sym)
+        if got == "n":
+            diffs += 1
+            print("%-4s %-55s final=n (asserted n OK)" % ("NEW", sym))
+        else:
+            issues += 1
+            print("%-4s %-55s final=%s (allowlist asserts n)" % ("FAIL", sym, got))
+    for sym in sorted(final):
+        if sym in expect or is_whitelisted(sym) or sym in extra_allow:
+            continue
+        got = final[sym]
+        if got not in ("y", "m"):
+            continue  # final-only 'n' is stock-equivalent; not drift
+        if allow_new_given:
+            want = allow_new.get(sym, "<unlisted>")
+            if want is None:
+                tag, note = "NEW", "allowed (any y/m)"
+                diffs += 1
+            elif want == got:
+                tag, note = "NEW", "allowed (exact %s)" % want
+                diffs += 1
+            else:
+                tag = "FAIL"
+                issues += 1
+                note = "allowlist wants %s" % want
+        else:
+            tag, note = "WARN", "no --allow-new given"
+            warns += 1
+        print("%-4s %-55s final=%s (%s)" % (tag, sym, got, note))
 
     print(
         "symbols: expect=%d final=%d diffs=%d warns=%d issues=%d"
