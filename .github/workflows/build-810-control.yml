@@ -78,6 +78,7 @@ jobs:
           # Deliberately NOT merging kalama_GKI.config (V3 root cause: stock
           # boot kernel is gki_defconfig-like, vendor symbols are module-only)
           # and NOT integrating KernelSU/SUSFS at all.
+          mkdir -p "$OUT_DIR"
           cp "$GITHUB_WORKSPACE/stock-config/stock_config_810.txt" \
             "$OUT_DIR/.config"
           grep -q '^CONFIG_LTO_CLANG_FULL=y$' "$OUT_DIR/.config"
