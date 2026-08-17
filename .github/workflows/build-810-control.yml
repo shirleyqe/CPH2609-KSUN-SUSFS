@@ -105,7 +105,6 @@ jobs:
             --disable OPLUS_SYSTEM_KERNEL \
             --disable OPLUS_SYSTEM_KERNEL_QCOM \
             --disable OPLUS_CHG
-          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
           # Suppress git trailing '+' in setlocalversion
           : > "$KERNEL_DIR/.scmversion"
           # Assertions: all 8+1 explicitly disabled symbols must be absent/unset (=n)
