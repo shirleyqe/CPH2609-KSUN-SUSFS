@@ -65,7 +65,7 @@ jobs:
           free -h
           df -h /
 
-      - name: CONTROL config (stock .810 IKCONFIG, NO fragment, NO KSU/SUSFS)
+      - name: CONTROL config (stock .810 IKCONFIG, NO fragment, NO KSU/SUSFS, CONTROL-V2 alignment)
         run: |
           export KERNEL_DIR="$PWD/kernel_platform/common"
           export OUT_DIR="$PWD/out"
@@ -74,39 +74,54 @@ jobs:
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
-          # CONTROL: stock .810 OEM IKCONFIG as the ONLY config base.
-          # Deliberately NOT merging kalama_GKI.config (V3 root cause: stock
-          # boot kernel is gki_defconfig-like, vendor symbols are module-only)
-          # and NOT integrating KernelSU/SUSFS at all.
+          # CONTROL-V2: stock .810 OEM IKCONFIG as the ONLY config base.
+          # Deliberately NOT merging kalama_GKI.config and NOT integrating
+          # KernelSU/SUSFS at all.
           mkdir -p "$OUT_DIR"
           cp "$GITHUB_WORKSPACE/stock-config/stock_config_810.txt" \
             "$OUT_DIR/.config"
           grep -q '^CONFIG_LTO_CLANG_FULL=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_IKCONFIG=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_IKCONFIG_PROC=y$' "$OUT_DIR/.config"
-          # Classified delta (same as V2..V4-A): stock's
-          # UNUSED_KSYMS_WHITELIST is a private jenkins path
-          # (/work/jenkins/...), not reproducible; TRIM=n exports the
-          # superset so stock vendor modules can still load.
+          # Classified delta: TRIM=n exports superset so vendor modules load.
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
             --disable TRIM_UNUSED_KSYMS \
             --undefine UNUSED_KSYMS_WHITELIST
-          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
-          # 810-CONTROL link fix (root cause of run 31771174569): vendor
-          # sensor Kconfig has `OPLUS_FEATURE_SENSOR_CFG tristate default y`.
-          # olddefconfig on the stock .810 IKCONFIG base (which has NO such
-          # symbol, i.e. =n) turns it builtin=y, and
-          # drivers/soc/oplus/sensor/oplus_sensor_devinfo.c then references
-          # qcom_smem_alloc (CONFIG_QCOM_SMEM=n in stock) and get_project
-          # (exported only by the oplus_project.ko module) -> Image link
-          # failure. Forcing it off restores the stock state exactly (no
-          # builtin, no module).
+          # CONTROL-V2 Requirement 1: Exact UTS alignment to stock .810
+          # Stock uts_release = 5.15.123-android13-8-00760-gf490405820f7
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
-            --disable OPLUS_FEATURE_SENSOR_CFG
-          # Gate: the fix must be present in the config actually built.
+            --set-str LOCALVERSION "-android13-8-00760-gf490405820f7" \
+            --disable LOCALVERSION_AUTO
+          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
+          # CONTROL-V2 Requirement 2: Explicitly disable the 7 vendor-injected
+          # control-only =y features plus OPLUS_CHG =m and OPLUS_FEATURE_SENSOR_CFG =n.
+          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+            --disable OPLUS_FEATURE_SENSOR_CFG \
+            --disable HORAE_THERMAL_SHELL \
+            --disable DYNAMIC_TUNING_SWAPPINESS \
+            --disable OPLUS_FEATURE_PERFORMANCE_MM \
+            --disable OPLUS_FEATURE_PERFORMANCE_SCHED \
+            --disable OPLUS_FEATURE_WINDOW_POLICY \
+            --disable OPLUS_SYSTEM_KERNEL \
+            --disable OPLUS_SYSTEM_KERNEL_QCOM \
+            --disable OPLUS_CHG
+          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
+          # Suppress git trailing '+' in setlocalversion
+          : > "$KERNEL_DIR/.scmversion"
+          # Assertions: all 8+1 explicitly disabled symbols must be absent/unset (=n)
           grep -q '^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_HORAE_THERMAL_SHELL is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_DYNAMIC_TUNING_SWAPPINESS is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_OPLUS_FEATURE_PERFORMANCE_MM is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_OPLUS_FEATURE_PERFORMANCE_SCHED is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_OPLUS_FEATURE_WINDOW_POLICY is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_OPLUS_SYSTEM_KERNEL is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_OPLUS_SYSTEM_KERNEL_QCOM is not set$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_OPLUS_CHG is not set$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_LOCALVERSION="-android13-8-00760-gf490405820f7"$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$OUT_DIR/.config"
           cp "$OUT_DIR/.config" "$OUT_DIR/.config.control"
-          # Gate: KernelSU/SUSFS must be complete absent.
+          # Gate: KernelSU/SUSFS must be completely absent.
           if grep -q '^CONFIG_KSU' "$OUT_DIR/.config"; then
             echo "KSU symbol leaked into CONTROL .config" >&2
             exit 1
@@ -130,6 +145,8 @@ jobs:
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
+          export LOCALVERSION=""
+          export KBUILD_BUILD_VERSION=1
           make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
           test -s "$OUT_DIR/arch/arm64/boot/Image"
 
@@ -140,20 +157,28 @@ jobs:
           CLANG_VER="$("$CLANG_PATH" --version | head -n1)"
           IMAGE_SIZE="$(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
           IMAGE_SHA="$(sha256sum "$OUT_DIR/arch/arm64/boot/Image" | awk '{print $1}')"
+          # UTS release exact verification
+          KERNEL_RELEASE="$(cat "$OUT_DIR/include/config/kernel.release")"
+          echo "kernel.release: $KERNEL_RELEASE"
+          test "$KERNEL_RELEASE" = "5.15.123-android13-8-00760-gf490405820f7"
+          grep -q '#define UTS_RELEASE "5.15.123-android13-8-00760-gf490405820f7"' "$OUT_DIR/include/generated/utsrelease.h"
+          grep -a "Linux version 5.15.123-android13-8-00760-gf490405820f7" "$OUT_DIR/vmlinux"
+          grep -a "Linux version 5.15.123-android13-8-00760-gf490405820f7" "$OUT_DIR/arch/arm64/boot/Image"
           # Binary evidence: no KernelSU/SUSFS strings anywhere.
-          grep -a -c 'KernelSU' "$OUT_DIR/vmlinux" || true
-          grep -a -c 'susfs\|KSU_SUSFS' "$OUT_DIR/vmlinux" || true
-          grep -a -c 'KernelSU' "$OUT_DIR/arch/arm64/boot/Image" || true
+          test "$(grep -a -c 'KernelSU' "$OUT_DIR/vmlinux" || true)" = "0"
+          test "$(grep -a -c -E 'susfs|KSU_SUSFS' "$OUT_DIR/vmlinux" || true)" = "0"
+          test "$(grep -a -c 'KernelSU' "$OUT_DIR/arch/arm64/boot/Image" || true)" = "0"
           {
-            echo "variant=CONTROL"
+            echo "variant=CONTROL_V2"
             echo "device=CPH2609"
             echo "firmware=CPH2609_14.0.0.810(EX01)"
             echo "kernel_tree=OnePlusOSS/android_kernel_oneplus_sm8550@ce4627cedf3e4aac93ad0b369f623efa057707fe"
             echo "vendor_tree=OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8550@6ada53700a567e0b92cebebccb49b74db720f96a"
-            echo "ksun=none (CONTROL: no KernelSU, no SUSFS)"
+            echo "ksun=none (CONTROL-V2: no KernelSU, no SUSFS)"
+            echo "uts_release=$KERNEL_RELEASE"
             echo "config_base=stock-config/stock_config_810.txt (.810 OEM IKCONFIG)"
             echo "config_fragment=none (empty; NOT kalama_GKI.config)"
-            echo "config_delta=TRIM_UNUSED_KSYMS=n (stock whitelist is private jenkins path); OPLUS_FEATURE_SENSOR_CFG forced n (link fix, see workflow comment)"
+            echo "config_delta=TRIM_UNUSED_KSYMS=n (stock whitelist is private jenkins path); LOCALVERSION=-android13-8-00760-gf490405820f7; LOCALVERSION_AUTO=n; 7 control-only y disabled (HORAE_THERMAL_SHELL, DYNAMIC_TUNING_SWAPPINESS, OPLUS_FEATURE_PERFORMANCE_MM, OPLUS_FEATURE_PERFORMANCE_SCHED, OPLUS_FEATURE_WINDOW_POLICY, OPLUS_SYSTEM_KERNEL, OPLUS_SYSTEM_KERNEL_QCOM); OPLUS_CHG disabled; OPLUS_FEATURE_SENSOR_CFG forced n (link fix)"
             echo "lto=full"
             echo "clang_path=$CLANG_PATH"
             echo "clang_version=$CLANG_VER"
@@ -167,7 +192,7 @@ jobs:
       - name: Archive CONTROL kernel
         uses: actions/upload-artifact@v4
         with:
-          name: CPH2609-810-CONTROL-kernel
+          name: CPH2609-810-CONTROL-V2-kernel
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
@@ -180,3 +205,5 @@ jobs:
             out/vmlinux
             out/config-audit.txt
             out/provenance.txt
+            out/include/config/kernel.release
+            out/include/generated/utsrelease.h
