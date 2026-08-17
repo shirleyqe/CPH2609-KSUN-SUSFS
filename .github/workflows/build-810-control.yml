@@ -195,14 +195,25 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
+          compression-level: 9
           path: |
             out/arch/arm64/boot/Image
             out/.config
             out/.config.control
             out/System.map
             out/Module.symvers
-            out/vmlinux
             out/config-audit.txt
             out/provenance.txt
             out/include/config/kernel.release
             out/include/generated/utsrelease.h
+
+      - name: Archive vmlinux debug
+        uses: actions/upload-artifact@v4
+        with:
+          name: CPH2609-810-CONTROL-V2-vmlinux
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+          path: |
+            out/vmlinux
