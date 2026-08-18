@@ -36,6 +36,7 @@ jobs:
             kernel_platform/common
           test "$(git -C kernel_platform/common rev-parse HEAD)" = \
             70fb7171ac59337b053b5b9930050862fc8c6d44
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 123/' kernel_platform/common/Makefile
           mkdir -p prebuilts/clang/host/linux-x86/clang-r450784e
           curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 \
             --max-time 1500 \
