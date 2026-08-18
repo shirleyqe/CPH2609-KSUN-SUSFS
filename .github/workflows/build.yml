@@ -30,10 +30,13 @@ jobs:
       - name: Fetch Google ACK 5.15 GKI source
         run: |
           mkdir -p kernel_platform
-          git clone --depth 50 \
-            --branch android13-5.15 \
+          git clone --filter=blob:none \
             https://android.googlesource.com/kernel/common \
             kernel_platform/common
+          git -C kernel_platform/common checkout \
+            70fb7171ac59337b053b5b9930050862fc8c6d44
+          test "$(git -C kernel_platform/common rev-parse HEAD)" = \
+            70fb7171ac59337b053b5b9930050862fc8c6d44
           mkdir -p prebuilts/clang/host/linux-x86/clang-r450784e
           curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 \
             --max-time 1500 \
