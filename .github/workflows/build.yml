@@ -285,12 +285,16 @@ jobs:
               " #include <trace/events/kmem.h>",
           ]) + "\n"
           memory_new = "\n".join([
-              "@@ -76,1 +76,4 @@",
-              "-#include <linux/swap_slots.h>",
-              "+#include <linux/swap_slots.h>",
+              "@@ -75,6 +75,9 @@",
+              " #include <linux/ptrace.h>",
+              " #include <linux/vmalloc.h>",
+              " #include <linux/swap_slots.h>",
               "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
               "+#include <linux/susfs_def.h>",
               "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              " #include <trace/hooks/mm.h>",
+              " ",
+              " #include <trace/events/kmem.h>",
           ]) + "\n"
           namei_old = "\n".join([
               "@@ -1565,6 +1590,17 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
