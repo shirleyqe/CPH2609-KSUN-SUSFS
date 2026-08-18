@@ -1,4 +1,4 @@
-name: Build CPH2609 KSUN SUSFS
+name: Build CPH2609 GKI KSUN SUSFS
 
 on:
   workflow_dispatch:
@@ -27,21 +27,13 @@ jobs:
             libelf-dev libssl-dev lld llvm lz4 pahole patch python3 rsync unzip \
             xz-utils zip zstd
 
-      - name: Fetch pinned sources
+      - name: Fetch Google ACK 5.15 GKI source
         run: |
-          git clone --depth 1 \
-            --branch oneplus/sm8550_u_14.0.0_oneplus_12r \
-            https://github.com/OnePlusOSS/android_kernel_oneplus_sm8550.git \
+          mkdir -p kernel_platform
+          git clone --depth 50 \
+            --branch android13-5.15 \
+            https://android.googlesource.com/kernel/common \
             kernel_platform/common
-          test "$(git -C kernel_platform/common rev-parse HEAD)" = \
-            ce4627cedf3e4aac93ad0b369f623efa057707fe
-          git clone --filter=blob:none --no-checkout \
-            https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8550.git \
-            oneplus_vendor
-          git -C oneplus_vendor sparse-checkout set vendor/oplus
-          git -C oneplus_vendor checkout \
-            6ada53700a567e0b92cebebccb49b74db720f96a
-          ln -s "$PWD/oneplus_vendor/vendor" vendor
           mkdir -p prebuilts/clang/host/linux-x86/clang-r450784e
           curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 \
             --max-time 1500 \
@@ -50,7 +42,6 @@ jobs:
           test -x prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang
           prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang --version \
             | tee "$RUNNER_TEMP/clang-version.txt"
-          # Must be the real r450784e package (stock .831 toolchain id), not r450784d.
           grep -F 'r450784e' "$RUNNER_TEMP/clang-version.txt"
           grep -E 'clang version 14\.0\.7' "$RUNNER_TEMP/clang-version.txt"
 
@@ -69,134 +60,94 @@ jobs:
           df -h /
 
       - name: Integrate KernelSU Next
-        working-directory: kernel_platform
+        working-directory: kernel_platform/common
         run: |
           curl --fail --location --silent --show-error \
             https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0-legacy-susfs/kernel/setup.sh \
             | bash -s v3.1.0-legacy-susfs
-           test "$(git -C KernelSU-Next rev-parse HEAD)" = \
-             ba4422f0556e10f40dda1887631d87a18ede4ec5
+          test -d KernelSU-Next
+          test "$(git -C KernelSU-Next rev-parse HEAD)" = \
+            ba4422f0556e10f40dda1887631d87a18ede4ec5
           python3 - <<'PY'
-          if True:
-           from pathlib import Path
+          from pathlib import Path
+          root = Path("KernelSU-Next/kernel")
 
-           root = Path("KernelSU-Next/kernel")
+          def replace(path, old, new, label):
+              file = root / path
+              text = file.read_text(encoding="utf-8")
+              if text.count(old) != 1:
+                  raise SystemExit(f"unexpected {label} replacement count")
+              file.write_text(text.replace(old, new), encoding="utf-8")
 
-           def replace(path, old, new, label):
-               file = root / path
-               text = file.read_text(encoding="utf-8")
-               if text.count(old) != 1:
-                   raise SystemExit(f"unexpected {label} replacement count")
-               file.write_text(text.replace(old, new), encoding="utf-8")
-
-           replace(
-               "ksud.c",
-               "static struct work_struct __maybe_unused stop_input_hook_work;\n#else",
-               "static struct work_struct __maybe_unused stop_input_hook_work;\n"
-               "bool ksu_init_rc_hook __read_mostly = true;\n"
-               "bool ksu_input_hook __read_mostly = true;\n#else",
-               "Kprobes hook compatibility variables",
-           )
-           replace(
-               "ksud.c",
-               "pr_info(\"unregister init_rc_hook kprobe: %d!\\n\", ret);",
-               "pr_info(\"unregister init_rc_hook kprobe: %d!\\n\", ret);\n"
-               "    ksu_init_rc_hook = false;",
-               "init rc compatibility state",
-           )
-           replace(
-               "ksud.c",
-               "pr_info(\"unregister input kprobe: %d!\\n\", ret);",
-               "pr_info(\"unregister input kprobe: %d!\\n\", ret);\n"
-               "    ksu_input_hook = false;",
-               "input compatibility state",
-           )
-
-           replace(
-               "kernel_umount.h",
-               "#if !defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n"
-               " // Handler function to be called from setresuid hook\n"
-               " int ksu_handle_umount(uid_t old_uid, uid_t new_uid);\n"
-               "#endif\n",
-               " // Handler function to be called from setresuid hook\n"
-               " int ksu_handle_umount(uid_t old_uid, uid_t new_uid);\n",
-               "kernel_umount.h handler guard",
-           )
-           replace(
-               "kernel_umount.c",
-               "#if !defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n"
-               "static void umount_tw_func(struct callback_head *cb)",
-               "static void umount_tw_func(struct callback_head *cb)",
-               "kernel_umount.c handler guard",
-           )
-           replace(
-               "kernel_umount.c",
-               "#endif // #if defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n\n"
-               "void ksu_kernel_umount_init(void)",
-               "void ksu_kernel_umount_init(void)",
-               "kernel_umount.c handler footer",
-           )
-
-           replace(
-               "setuid_hook.c",
-               "extern void susfs_run_sus_path_loop(uid_t uid);",
-               "extern void susfs_run_sus_path_loop(void);",
-               "setuid path declaration",
-           )
-           for old in (
-               "extern void susfs_reorder_mnt_id(void);\n",
-               "extern void susfs_try_umount(uid_t uid);\n",
-               "    susfs_reorder_mnt_id();\n",
-           ):
-               replace("setuid_hook.c", old, "", "setuid deprecated declaration/call")
-           replace(
-               "setuid_hook.c",
-               "    susfs_try_umount(new_uid);",
-               "    ksu_handle_umount(old_uid, new_uid);",
-               "setuid umount handler",
-           )
-           replace(
-               "setuid_hook.c",
-               "    susfs_run_sus_path_loop(new_uid);",
-               "    susfs_run_sus_path_loop();",
-               "setuid path loop call",
-           )
-
-           replace(
-               "supercalls.c",
-               "\n".join([
-                   "        if (cmd == CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH) {",
-                   "            susfs_set_i_state_on_external_dir(arg);",
-                   "            return 0;",
-                   "        }",
-                   "        if (cmd == CMD_SUSFS_SET_SDCARD_ROOT_PATH) {",
-                   "            susfs_set_i_state_on_external_dir(arg);",
-                   "            return 0;",
-                   "        }",
-               ]) + "\n",
-               "",
-               "deprecated SUSFS path handlers",
-           )
-           replace(
-               "supercalls.c",
-               "\n".join([
-                   "#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT",
-                   "        if (cmd == CMD_SUSFS_ADD_TRY_UMOUNT) {",
-                   "            susfs_add_try_umount(arg);",
-                   "            return 0;",
-                   "        }",
-                   "#endif //#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT",
-               ]) + "\n",
-               "",
-               "deprecated SUSFS try_umount handler",
-           )
+          replace(
+              "kernel_umount.h",
+              "#if !defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n"
+              " // Handler function to be called from setresuid hook\n"
+              " int ksu_handle_umount(uid_t old_uid, uid_t new_uid);\n"
+              "#endif\n",
+              " // Handler function to be called from setresuid hook\n"
+              " int ksu_handle_umount(uid_t old_uid, uid_t new_uid);\n",
+              "kernel_umount.h handler guard",
+          )
+          replace(
+              "setuid_hook.c",
+              "extern void susfs_run_sus_path_loop(uid_t uid);",
+              "extern void susfs_run_sus_path_loop(void);",
+              "setuid path declaration",
+          )
+          for old in (
+              "extern void susfs_reorder_mnt_id(void);\n",
+              "extern void susfs_try_umount(uid_t uid);\n",
+              "    susfs_reorder_mnt_id();\n",
+          ):
+              replace("setuid_hook.c", old, "", "setuid deprecated declaration/call")
+          replace(
+              "setuid_hook.c",
+              "    susfs_try_umount(new_uid);",
+              "    ksu_handle_umount(old_uid, new_uid);",
+              "setuid umount handler",
+          )
+          replace(
+              "setuid_hook.c",
+              "    susfs_run_sus_path_loop(new_uid);",
+              "    susfs_run_sus_path_loop();",
+              "setuid path loop call",
+          )
+          replace(
+              "supercalls.c",
+              "\n".join([
+                  "        if (cmd == CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH) {",
+                  "            susfs_set_i_state_on_external_dir(arg);",
+                  "            return 0;",
+                  "        }",
+                  "        if (cmd == CMD_SUSFS_SET_SDCARD_ROOT_PATH) {",
+                  "            susfs_set_i_state_on_external_dir(arg);",
+                  "            return 0;",
+                  "        }",
+              ]) + "\n",
+              "",
+              "deprecated SUSFS path handlers",
+          )
+          replace(
+              "supercalls.c",
+              "\n".join([
+                  "#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT",
+                  "        if (cmd == CMD_SUSFS_ADD_TRY_UMOUNT) {",
+                  "            susfs_add_try_umount(arg);",
+                  "            return 0;",
+                  "        }",
+                  "#endif //#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT",
+              ]) + "\n",
+              "",
+              "deprecated SUSFS try_umount handler",
+          )
           PY
-           if grep -REq \
-             'susfs_try_umount|susfs_reorder_mnt_id|susfs_set_i_state_on_external_dir|susfs_add_try_umount' \
-             KernelSU-Next/kernel/setuid_hook.c KernelSU-Next/kernel/supercalls.c; then
-             echo "deprecated SUSFS command handler remains in KernelSU-Next"
-             exit 1
-           fi
+          if grep -REq \
+            'susfs_try_umount|susfs_reorder_mnt_id|susfs_set_i_state_on_external_dir|susfs_add_try_umount' \
+            KernelSU-Next/kernel/setuid_hook.c KernelSU-Next/kernel/supercalls.c; then
+            echo "deprecated SUSFS command handler remains in KernelSU-Next"
+            exit 1
+          fi
 
       - name: Integrate SUSFS
         run: |
@@ -214,12 +165,11 @@ jobs:
           cp kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch \
             kernel_platform/common/
           cp kernel_platform/susfs4ksu/kernel_patches/fs/* kernel_platform/common/fs/
-           cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
-             kernel_platform/common/include/linux/
+          cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
+            kernel_platform/common/include/linux/
           python3 - kernel_platform/common/fs/susfs.c <<'PY'
           from pathlib import Path
           import sys
-
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
           old = "static void susfs_run_sus_path_loop(void)"
@@ -228,345 +178,43 @@ jobs:
           path.write_text(text.replace(old, "void susfs_run_sus_path_loop(void)"),
                           encoding="utf-8")
           PY
-          python3 - kernel_platform/common/drivers/soc/oplus/sensor/oplus_sensor_devinfo.c <<'PY'
-          from pathlib import Path
-          import sys
-
-          path = Path(sys.argv[1])
-          text = path.read_text(encoding="utf-8")
-          marker = '#include "oplus_sensor_devinfo.h"\n'
-          fallback = (marker +
-                      "\n#ifndef CONFIG_OPLUS_FEATURE_OPROJECT\n"
-                      "unsigned int __weak get_project(void)\n"
-                      "{\n"
-                      "\treturn 0;\n"
-                      "}\n"
-                      "EXPORT_SYMBOL(get_project);\n"
-                      "#endif\n")
-          if text.count(marker) != 1:
-              raise SystemExit("unexpected Oplus sensor header")
-          path.write_text(text.replace(marker, fallback), encoding="utf-8")
-          PY
-          SUSFS_PATCH=kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
-          ADAPTED_PATCH="$RUNNER_TEMP/50_add_susfs_in_gki-android13-5.15-oneplus.patch"
-          python3 - "$SUSFS_PATCH" "$ADAPTED_PATCH" <<'PY'
-          from pathlib import Path
-          import sys
-
-          source = Path(sys.argv[1])
-          destination = Path(sys.argv[2])
-          text = source.read_text(encoding="utf-8")
-
-          def remove_between(value, start, end, label):
-              if value.count(start) != 1 or value.count(end) != 1:
-                  raise SystemExit(f"unexpected SUSFS {label} hunk boundary")
-              begin = value.index(start)
-              finish = value.index(end, begin)
-              return value[:begin] + value[finish:]
-
-          def replace_exact(value, old, new, expected, label):
-              if value.count(old) != expected:
-                  raise SystemExit(f"unexpected SUSFS {label} replacement count")
-              return value.replace(old, new)
-
-          for path in (
-              "drivers/input/input.c",
-              "fs/read_write.c",
-              "security/selinux/hooks.c",
-              "security/selinux/selinuxfs.c",
-          ):
-              start = f"diff --git a/{path} b/{path}\n"
-              if text.count(start) != 1:
-                  raise SystemExit(f"unexpected SUSFS {path} patch count")
-              begin = text.index(start)
-              finish = text.find("diff --git ", begin + len(start))
-              if finish < 0:
-                  finish = len(text)
-              text = text[:begin] + text[finish:]
-
-          text = remove_between(
-              text,
-              "@@ -171,6 +195,13 @@ EXPORT_SYMBOL_NS(vfs_getattr, ANDROID_GKI_VFS_EXPORT_ONLY);\n",
-              "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
-              "fs/stat.c fstat declaration")
-          text = remove_between(
-              text,
-              "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
-              "@@ -206,6 +251,18 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
-              "fs/stat.c fstat hook")
-          tab = chr(9)
-          stat_declarations = "\n".join([
-              "+#ifdef CONFIG_KSU_SUSFS",
-              "+" + tab + "extern bool ksu_su_compat_enabled;",
-              "+" + tab + "extern bool __ksu_is_allow_uid_for_current(uid_t uid);",
-              "+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)",
-              "+" + tab + "extern int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);",
-              "+#else",
-              "+" + tab + "extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);",
-              "+#endif",
-              "+#endif",
-              "+",
-          ]) + "\n"
-          stat_marker = " \tint error;\n \n+#ifdef CONFIG_KSU_SUSFS\n+" + tab + "if (likely(susfs_is_current_proc_umounted()))"
-          if text.count(stat_marker) != 1:
-              raise SystemExit("unexpected SUSFS fs/stat.c statx hunk")
-          stat_prefix = " \tint error;\n \n"
-          text = text.replace(stat_marker, stat_prefix + stat_declarations + stat_marker[len(stat_prefix):])
-          text = replace_exact(
-              text,
-              "@@ -206,6 +251,18 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
-              "@@ -206,6 +251,28 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
-              1,
-              "fs/stat.c statx hunk size")
-          text = replace_exact(
-              text,
-              "+extern struct static_key_true ksu_su_compat_enabled;\n",
-              "+extern bool ksu_su_compat_enabled;\n",
-              2,
-              "sucompat declaration")
-          text = replace_exact(
-              text,
-              "+\tif (static_branch_likely(&ksu_su_compat_enabled))",
-              "+\tif (ksu_su_compat_enabled)",
-              3,
-              "sucompat branch")
-          if any(symbol in text for symbol in (
-              "ksu_is_init_rc_hook_enabled",
-              "ksu_is_input_hook_enabled",
-              "ksu_handle_vfs_fstat",
-              "ksu_selinux_hide_running",
-              "fake_status_initialize_key",
-          )):
-              raise SystemExit("incompatible legacy KernelSU SUSFS symbol remains")
-
-          memory_old = "\n".join([
-              "@@ -74,6 +74,9 @@",
-              " #include <linux/perf_event.h>",
-              " #include <linux/ptrace.h>",
-              " #include <linux/vmalloc.h>",
-              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              "+#include <linux/susfs_def.h>",
-              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              " #include <trace/hooks/mm.h>",
-              " ",
-              " #include <trace/events/kmem.h>",
-          ]) + "\n"
-          memory_new = "\n".join([
-              "@@ -76,1 +76,4 @@",
-              "-#include <linux/swap_slots.h>",
-              "+#include <linux/swap_slots.h>",
-              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              "+#include <linux/susfs_def.h>",
-              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-          ]) + "\n"
-          namei_old = "\n".join([
-              "@@ -1565,6 +1590,17 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
-              " \t\tdput(dentry);",
-              " \t\tdentry = old;",
-              " \t}",
-              "+#ifdef CONFIG_KSU_SUSFS_SUS_PATH",
-              "+\tif (unlikely(dentry) && !IS_ERR(dentry) && dentry->d_inode && !found_sus_path && susfs_is_inode_sus_path(dentry->d_inode)) {",
-              "+\t\tif (d_in_lookup(dentry))",
-              "+\t\t\td_lookup_done(dentry);",
-              "+\t\tif (!(flags & LOOKUP_RCU))",
-              "+\t\t\tdput(dentry);",
-              "+\t\tdentry = d_alloc(base, &susfs_fake_qstr_name);",
-              "+\t\tfound_sus_path = true;",
-              "+\t\tgoto retry;",
-              "+\t}",
-              "+#endif",
-              " \treturn dentry;",
-              " }",
-              " EXPORT_SYMBOL(lookup_one_qstr_excl);",
-          ]) + "\n"
-          namei_new = "\n".join([
-              "@@ -1566,1 +1566,12 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
-              "-\t\tdentry = old;",
-              "+\t\tdentry = old;",
-              "+#ifdef CONFIG_KSU_SUSFS_SUS_PATH",
-              "+\tif (unlikely(dentry) && !IS_ERR(dentry) && dentry->d_inode && !found_sus_path && susfs_is_inode_sus_path(dentry->d_inode)) {",
-              "+\t\tif (d_in_lookup(dentry))",
-              "+\t\t\td_lookup_done(dentry);",
-              "+\t\tif (!(flags & LOOKUP_RCU))",
-              "+\t\t\tdput(dentry);",
-              "+\t\tdentry = d_alloc(base, &susfs_fake_qstr_name);",
-              "+\t\tfound_sus_path = true;",
-              "+\t\tgoto retry;",
-              "+\t}",
-              "+#endif",
-          ]) + "\n"
-          task_old = "\n".join([
-              "@@ -857,6 +895,13 @@ static int show_smap(struct seq_file *m, void *v)",
-              " \tstruct vm_area_struct *vma = v;",
-              " \tstruct mem_size_stats mss;",
-              " ",
-              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              "+\tif (vma->vm_file) {",
-              "+\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))",
-              "+\t\t\treturn 0;",
-              "+\t}",
-              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              "+",
-              " \tmemset(&mss, 0, sizeof(mss));",
-              " ",
-              " \tif (!vma_pages(vma))",
-          ]) + "\n"
-          task_new = "\n".join([
-              "@@ -860,1 +860,8 @@ static int show_smap(struct seq_file *m, void *v)",
-              "-\tmemset(&mss, 0, sizeof(mss));",
-              "+\tmemset(&mss, 0, sizeof(mss));",
-              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              "+\tif (vma->vm_file) {",
-              "+\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))",
-              "+\t\t\treturn 0;",
-              "+\t}",
-              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              "+",
-          ]) + "\n"
-          replacements = [
-              ("memory.c", memory_old, memory_new),
-              ("namei.c", namei_old, namei_new),
-              ("task_mmu.c", task_old, task_new),
-          ]
-          for name, old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f"unexpected SUSFS {name} hunk count")
-              text = text.replace(old, new)
-          destination.write_text(text, encoding="utf-8")
-          PY
           patch --batch --fuzz=0 --no-backup-if-mismatch \
             -d kernel_platform/common -p1 \
-            < "$ADAPTED_PATCH"
+            < kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
           test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
           grep -q '#include <linux/susfs_def.h>' kernel_platform/common/mm/memory.c
           grep -q 'CONFIG_KSU_SUSFS_SUS_MAP' kernel_platform/common/mm/memory.c
-          python3 - kernel_platform/common/fs/proc/task_mmu.c <<'PY'
-          from pathlib import Path
-          import sys
 
-          path = Path(sys.argv[1])
-          text = path.read_text(encoding="utf-8")
-          include = "#include <linux/susfs_def.h>\n"
-          compatibility = (include +
-                          "#ifndef VMA_PAD_START\n"
-                          "#define VMA_PAD_START(vma) (vma->vm_end)\n"
-                          "#endif\n")
-          if text.count(include) != 1:
-              raise SystemExit("unexpected task_mmu.c SUSFS include count")
-          path.write_text(text.replace(include, compatibility), encoding="utf-8")
-          PY
-          grep -q '#define VMA_PAD_START' kernel_platform/common/fs/proc/task_mmu.c
-          test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
-
-      - name: Build kernel
+      - name: Configure GKI Kernel
         run: |
           export KERNEL_DIR="$PWD/kernel_platform/common"
           export OUT_DIR="$PWD/out"
-          export OUT_DIR_V3="$PWD/out-v3"
-          export OUT_DIR_V1="$PWD/out-v1"
           export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
-          # --- V4-A config: stock IKCONFIG base + official kalama_GKI.config
-          #     fragment (strict merge, OPLUS_* ifdef bodies kept) + the V3
-          #     delta (KSU/KSU_SUSFS=y, TRIM_UNUSED_KSYMS=n).  The SINGLE
-          #     experiment variable vs V3: disable the four QTI panic-on
-          #     switches that the fragment sets =y while the stock .831
-          #     kernel does not enable them at all:
-          #       CONFIG_QCOM_PANIC_ON_NOTIF_TIMEOUT
-          #       CONFIG_QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT
-          #       CONFIG_QCOM_FORCE_WDOG_BITE_ON_PANIC
-          #       CONFIG_EDAC_QCOM_LLCC_PANIC_ON_UE
-          #     Kconfig note (pinned tree): PDR_NOTIF_TIMEOUT has no
-          #     depends; FORCE_WDOG_BITE_ON_PANIC depends only on
-          #     QCOM_WDT_CORE(=m, kept); EDAC_QCOM_LLCC_PANIC_ON_UE depends
-          #     only on EDAC_QCOM(=m, kept).  QCOM_WDOG_BITE_EARLY_PANIC
-          #     depends on FORCE_WDOG_BITE_ON_PANIC: it is 'not set' in V3,
-          #     and once FORCE_WDOG_BITE_ON_PANIC=n its dependency is
-          #     unsatisfiable so Kconfig omits its line from the V4-A .config
-          #     (effective value stays n - no behavioral delta).  That
-          #     line-drop is allowed explicitly below; any other collateral
-          #     change is caught by the strict V3 vs V4-A config diff.
-          #     A V3 reference config is generated in out-v3 from the same
-          #     tree/run so the diff is produced in one identical
-          #     environment (and out-v3/.config must match the real V3
-          #     run-31465846675 .config byte-for-byte).
-          mkdir -p "$OUT_DIR" "$OUT_DIR_V3" "$OUT_DIR_V1"
-          python3 "$GITHUB_WORKSPACE/stock-config/merge_config.py" \
-            "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
-            "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
-            "$OUT_DIR/.config"
-          # Pre-olddefconfig sanity: stock ZRAM must survive fragment merge.
-          grep -q '^CONFIG_ZRAM=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_ZSMALLOC=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_QCOM_SMEM=m$' "$OUT_DIR/.config"
-          # --- V3 reference config (control): same merge, NO panic-on
-          #     disables.  Used for the strict V3 vs V4-A config diff.
-          cp "$OUT_DIR/.config" "$OUT_DIR_V3/.config"
-          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR_V3/.config" \
-            --enable KSU --enable KSU_SUSFS \
-            --disable TRIM_UNUSED_KSYMS
-          make -C "$KERNEL_DIR" O="$OUT_DIR_V3" olddefconfig
-          cp "$OUT_DIR_V3/.config" "$OUT_DIR/.config.v3"
-          # --- V4-A experiment config: V3 profile + 4 panic-on disables.
+          mkdir -p "$OUT_DIR"
+          make -C "$KERNEL_DIR" O="$OUT_DIR" gki_defconfig
           "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
-            --enable KSU --enable KSU_SUSFS \
+            --enable KSU \
+            --enable KSU_SUSFS \
+            --enable KSU_SUSFS_SUS_PATH \
+            --enable KSU_SUSFS_SUS_MAP \
+            --enable KSU_SUSFS_SUS_KSTAT \
+            --enable KSU_SUSFS_SUS_MOUNT \
+            --enable KSU_SUSFS_TRY_UMOUNT \
+            --enable KSU_SUSFS_OPEN_REDIRECT \
+            --enable KSU_SUSFS_SPOOF_UNAME \
+            --enable KSU_SUSFS_ENABLE_LOG \
+            --enable KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            --enable KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
             --disable TRIM_UNUSED_KSYMS \
-            --disable QCOM_PANIC_ON_NOTIF_TIMEOUT \
-            --disable QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT \
-            --disable QCOM_FORCE_WDOG_BITE_ON_PANIC \
-            --disable EDAC_QCOM_LLCC_PANIC_ON_UE
+            --undefine UNUSED_KSYMS_WHITELIST \
+            --set-str LOCALVERSION "-android13-8-00760-gf490405820f7" \
+            --disable LOCALVERSION_AUTO
+          : > "$KERNEL_DIR/.scmversion"
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
-          cp "$OUT_DIR/.config" "$OUT_DIR/.config.v4a"
-          # --- Post-olddefconfig assertions: all four are NOT set in V4-A
-          #     and stay =y in the V3 reference (single-variable proof).
-          #     QCOM_WDOG_BITE_EARLY_PANIC (depends on FORCE_WDOG_BITE_ON_PANIC)
-          #     drops out of V4-A .config entirely (n in both, no delta).
-          for sym in \
-            QCOM_PANIC_ON_NOTIF_TIMEOUT \
-            QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT \
-            QCOM_FORCE_WDOG_BITE_ON_PANIC \
-            EDAC_QCOM_LLCC_PANIC_ON_UE; do
-            grep -q "^# CONFIG_${sym} is not set$" "$OUT_DIR/.config"
-            grep -q "^CONFIG_${sym}=y$" "$OUT_DIR_V3/.config"
-          done
-          grep -q '^# CONFIG_QCOM_WDOG_BITE_EARLY_PANIC is not set$' \
-            "$OUT_DIR_V3/.config"
-          if grep -q '^CONFIG_QCOM_WDOG_BITE_EARLY_PANIC' "$OUT_DIR/.config"; then
-            echo "QCOM_WDOG_BITE_EARLY_PANIC must be absent from V4-A .config"
-            exit 1
-          fi
-          # --- Strict V3 vs V4-A config diff: after removing the four
-          #     panic-on switches, the QCOM_WDOG_BITE_EARLY_PANIC line-drop
-          #     (and diff headers/context), nothing may differ.
-          diff -u "$OUT_DIR_V3/.config" "$OUT_DIR/.config" \
-            | grep -v -E '^[+-]# CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE) is not set$' \
-            | grep -v -E '^[+-]CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE)=y$' \
-            | grep -v -E '^[-]# CONFIG_QCOM_WDOG_BITE_EARLY_PANIC is not set$' \
-            | grep -v -E '^( |---|\+\+\+|@@|\\ No newline|$)' \
-            > "$RUNNER_TEMP/v3_vs_v4a_residual.diff" || true
-          if [ -s "$RUNNER_TEMP/v3_vs_v4a_residual.diff" ]; then
-            echo "V3 vs V4-A config diff is wider than the 4 panic-on symbols:"
-            cat "$RUNNER_TEMP/v3_vs_v4a_residual.diff"
-            exit 1
-          fi
-          # --- V2 reference config: same tree/toolchain, V2 config profile,
-          #     generated here for the V2/V3 config diff artifact ---
-          mkdir -p "$OUT_DIR_V1"
-          tr -d '\r' < "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
-            > "$OUT_DIR_V1/.config"
-          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR_V1/.config" \
-            --enable KSU --enable KSU_SUSFS \
-            --disable OPLUS_FEATURE_OPROJECT \
-            --disable TRIM_UNUSED_KSYMS \
-            --disable OPLUS_FEATURE_SENSOR_CFG
-          make -C "$KERNEL_DIR" O="$OUT_DIR_V1" olddefconfig
-          cp "$OUT_DIR_V1/.config" "$OUT_DIR_V1/.config.v2"
-          # --- V4-A build: Full LTO (stock profile) ---
-          make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
-          test -s "$OUT_DIR/arch/arm64/boot/Image"
           grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS_SUS_PATH=y$' "$OUT_DIR/.config"
@@ -580,51 +228,35 @@ jobs:
           grep -q '^CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_LTO_CLANG_FULL=y$' "$OUT_DIR/.config"
-          grep -q '^# CONFIG_LTO_CLANG_THIN is not set$' "$OUT_DIR/.config"
           grep -q '^CONFIG_IKCONFIG=y$' "$OUT_DIR/.config"
           grep -q '^CONFIG_IKCONFIG_PROC=y$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_GKI_HIDDEN_QCOM_CONFIGS=y$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_QCOM_SMEM_STATE=y$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_QCOM_SMEM=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_OPLUS_FEATURE_SENSOR_CFG=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_HORAE_THERMAL_SHELL=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_OPLUS_CHG=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_OPLUS_SYSTEM_KERNEL=y$' "$OUT_DIR/.config"
           grep -q '^# CONFIG_TRIM_UNUSED_KSYMS is not set$' "$OUT_DIR/.config"
-          # Stock ZRAM/ZSMALLOC must remain after olddefconfig (fragment has
-          # commented '# CONFIG_ZRAM=m' lines that must NOT disable them).
-          grep -q '^CONFIG_ZRAM=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_ZSMALLOC=m$' "$OUT_DIR/.config"
-          # Critical QCOM storage / smem / phy chain from official fragment.
-          grep -q '^CONFIG_SCSI_UFS_QCOM=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_PHY_QCOM_UFS=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_PHY_QCOM_UFS_V4=m$' "$OUT_DIR/.config"
-          grep -q '^CONFIG_RPMSG_QCOM_GLINK_SMEM=m$' "$OUT_DIR/.config"
-          python3 "$GITHUB_WORKSPACE/stock-config/audit_config.py" \
-            --allow CONFIG_QCOM_PANIC_ON_NOTIF_TIMEOUT \
-            --allow CONFIG_QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT \
-            --allow CONFIG_QCOM_FORCE_WDOG_BITE_ON_PANIC \
-            --allow CONFIG_EDAC_QCOM_LLCC_PANIC_ON_UE \
-            "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
-            "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
-            "$OUT_DIR/.config"
-          if grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=' "$OUT_DIR/.config"; then
-            grep -q '^CONFIG_OPLUS_FEATURE_OPROJECT=m$' "$OUT_DIR/.config"
-          fi
+          grep -q '^CONFIG_LOCALVERSION="-android13-8-00760-gf490405820f7"$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$OUT_DIR/.config"
+
+      - name: Build kernel Image
+        run: |
+          export KERNEL_DIR="$PWD/kernel_platform/common"
+          export OUT_DIR="$PWD/out"
+          export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export LOCALVERSION=""
+          export KBUILD_BUILD_VERSION=1
+          make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
+          test -s "$OUT_DIR/arch/arm64/boot/Image"
+
+      - name: Verify kernel Image and symbols
+        run: |
+          export OUT_DIR="$PWD/out"
           test -s "$OUT_DIR/vmlinux"
           test -s "$OUT_DIR/System.map"
-          # Image-only build still emits vmlinux.symvers via modpost; expose
-          # it as Module.symvers for vendor CRC compares.
-          if [ -s "$OUT_DIR/Module.symvers" ]; then
-            :
-          elif [ -s "$OUT_DIR/vmlinux.symvers" ]; then
-            cp -f "$OUT_DIR/vmlinux.symvers" "$OUT_DIR/Module.symvers"
-          else
-            echo "missing Module.symvers/vmlinux.symvers" >&2
-            exit 1
-          fi
-          test -s "$OUT_DIR/Module.symvers"
+          KERNEL_RELEASE="$(cat "$OUT_DIR/include/config/kernel.release")"
+          echo "kernel.release: $KERNEL_RELEASE"
+          test "$KERNEL_RELEASE" = "5.15.123-android13-8-00760-gf490405820f7"
+          grep -q '#define UTS_RELEASE "5.15.123-android13-8-00760-gf490405820f7"' "$OUT_DIR/include/generated/utsrelease.h"
           strings "$OUT_DIR/vmlinux" > "$RUNNER_TEMP/vmlinux.strings"
           grep -q KernelSU "$RUNNER_TEMP/vmlinux.strings"
           grep -qi SUSFS "$RUNNER_TEMP/vmlinux.strings"
@@ -632,73 +264,19 @@ jobs:
           grep -Eq ' [Tt] (susfs_add_sus_path|susfs_get_enabled_features)$' \
             "$OUT_DIR/System.map"
           CLANG_PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang"
-          CLANG_VER="$("$CLANG_PATH" --version | tr '\n' ' ')"
+          CLANG_VER="$("$CLANG_PATH" --version | head -n1)"
           IMAGE_SIZE="$(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
           IMAGE_SHA="$(sha256sum "$OUT_DIR/arch/arm64/boot/Image" | awk '{print $1}')"
           {
-            echo "V4-A Image size: $IMAGE_SIZE"
-            echo "$IMAGE_SHA  $OUT_DIR/arch/arm64/boot/Image"
-            echo "clang: $CLANG_VER"
-            echo "V4-A config profile:"
-            grep -E '^CONFIG_(KSU|KSU_SUSFS|KSU_SUSFS_SUS_PATH|KSU_SUSFS_SUS_MAP|KSU_SUSFS_SUS_KSTAT|KSU_SUSFS_SUS_MOUNT|KSU_SUSFS_TRY_UMOUNT|KSU_SUSFS_OPEN_REDIRECT|KSU_SUSFS_SPOOF_UNAME|KSU_SUSFS_ENABLE_LOG|KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS|KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG)=y$' \
-              "$OUT_DIR/.config"
-            grep -E '^CONFIG_(LTO|LTO_CLANG|LTO_CLANG_FULL)=y$|^# CONFIG_LTO_CLANG_THIN is not set$' \
-              "$OUT_DIR/.config"
-            grep -E '^CONFIG_(IKCONFIG|IKCONFIG_PROC|GKI_HIDDEN_QCOM_CONFIGS|QCOM_SMEM_STATE|OPLUS_SYSTEM_KERNEL)=y$|^CONFIG_QCOM_SMEM=m$|^CONFIG_OPLUS_FEATURE_(SENSOR_CFG|OPROJECT)=m$|^CONFIG_HORAE_THERMAL_SHELL=m$|^CONFIG_OPLUS_CHG=m$|^CONFIG_ZRAM=m$|^CONFIG_ZSMALLOC=m$' \
-              "$OUT_DIR/.config"
-            grep -E '^CONFIG_(SCSI_UFS_QCOM|PHY_QCOM_UFS|PHY_QCOM_UFS_V4|RPMSG_QCOM_GLINK_SMEM)=m$' \
-              "$OUT_DIR/.config"
-            grep -E '^# CONFIG_TRIM_UNUSED_KSYMS is not set$|^CONFIG_UNUSED_KSYMS_WHITELIST' \
-              "$OUT_DIR/.config"
-            echo "V4-A experiment variable (4 QTI panic-on switches, all NOT set):"
-            grep -E '^# CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE) is not set$' \
-              "$OUT_DIR/.config"
-            echo "V4-A: QCOM_WDOG_BITE_EARLY_PANIC line dropped (depends FORCE_WDOG_BITE, n in both):"
-            if grep -q '^CONFIG_QCOM_WDOG_BITE_EARLY_PANIC' "$OUT_DIR/.config"; then
-              echo "unexpected: symbol present in V4-A .config"
-              exit 1
-            fi
-            echo "V3 reference config (same run, control) - same 4 switches, all y:"
-            grep -E '^CONFIG_(QCOM_PANIC_ON_NOTIF_TIMEOUT|QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT|QCOM_FORCE_WDOG_BITE_ON_PANIC|EDAC_QCOM_LLCC_PANIC_ON_UE)=y$' \
-              "$OUT_DIR_V3/.config"
-            echo "V3 vs V4-A config diff (must be the 4 switches + early-panic drop):"
-            diff "$OUT_DIR_V3/.config" "$OUT_DIR/.config" \
-              | grep -E '^[<>]' \
-              | grep -v '^< # CONFIG_QCOM_WDOG_BITE_EARLY_PANIC is not set$' \
-              || true
-            echo "V2 reference profile (for diff):"
-            grep -E '^# CONFIG_QCOM_SMEM is not set$|^# CONFIG_OPLUS_FEATURE_SENSOR_CFG is not set$|^# CONFIG_OPLUS_FEATURE_OPROJECT is not set$' \
-              "$OUT_DIR_V1/.config"
-            echo "vmlinux strings:"
-            grep -E -i -m 20 'kernelsu|susfs' "$RUNNER_TEMP/vmlinux.strings"
-            echo "System.map symbols:"
-            grep -E ' [Tt] (susfs_init|susfs_add_sus_path|susfs_get_enabled_features)$' \
-              "$OUT_DIR/System.map"
-            echo "New y/m-symbols vs stock+fragment (vendor-tree extras):"
-            awk '/^CONFIG_[A-Z0-9_]+=[ym]$/ { split($0, a, "="); print a[1] }' \
-              "$OUT_DIR/.config" | sort -u > "$RUNNER_TEMP/new_ym_syms.txt"
-            python3 "$GITHUB_WORKSPACE/stock-config/merge_config.py" \
-              "$GITHUB_WORKSPACE/stock-config/stock_config.txt" \
-              "$GITHUB_WORKSPACE/stock-config/kalama_GKI.config" \
-              "$RUNNER_TEMP/expect.config" > /dev/null
-            awk '/^CONFIG_[A-Z0-9_]+=[ym]$/ { split($0, a, "="); print a[1] }' \
-              "$RUNNER_TEMP/expect.config" | sort -u \
-              > "$RUNNER_TEMP/expect_ym.txt"
-            comm -23 "$RUNNER_TEMP/new_ym_syms.txt" \
-              "$RUNNER_TEMP/expect_ym.txt"
-          } | tee "$OUT_DIR/verification.txt"
-          {
-            echo "variant=V4-A"
+            echo "variant=GKI_ACK_5.15_KSUN_SUSFS"
             echo "device=CPH2609"
-            echo "firmware=CPH2609_14.0.0.831(EX01)"
-            echo "kernel_tree=OnePlusOSS/android_kernel_oneplus_sm8550@ce4627cedf3e4aac93ad0b369f623efa057707fe"
-            echo "vendor_tree=OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8550@6ada53700a567e0b92cebebccb49b74db720f96a"
+            echo "firmware=CPH2609_14.0.0.810(EX01)"
+            echo "kernel_tree=Google ACK android13-5.15"
             echo "ksun=v3.1.0-legacy-susfs@ba4422f0556e10f40dda1887631d87a18ede4ec5"
-            echo "config_base=stock-config/stock_config.txt (OEM IKCONFIG)"
-            echo "config_fragment=stock-config/kalama_GKI.config (strict merge, OPLUS ifdef bodies kept)"
-            echo "config_delta=KSU=y KSU_SUSFS=y TRIM_UNUSED_KSYMS=n"
-            echo "v4a_disable=QCOM_PANIC_ON_NOTIF_TIMEOUT=n QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT=n QCOM_FORCE_WDOG_BITE_ON_PANIC=n EDAC_QCOM_LLCC_PANIC_ON_UE=n (single experiment variable vs V3)"
-            echo "v4a_audit_allow=CONFIG_QCOM_PANIC_ON_NOTIF_TIMEOUT CONFIG_QCOM_PANIC_ON_PDR_NOTIF_TIMEOUT CONFIG_QCOM_FORCE_WDOG_BITE_ON_PANIC CONFIG_EDAC_QCOM_LLCC_PANIC_ON_UE"
+            echo "susfs=gki-android13-5.15@ccb1918684b27644d17a6c842f57b60ae5966025"
+            echo "uts_release=$KERNEL_RELEASE"
+            echo "config_base=gki_defconfig"
+            echo "config_delta=KSU=y KSU_SUSFS=y TRIM_UNUSED_KSYMS=n LOCALVERSION=-android13-8-00760-gf490405820f7"
             echo "lto=full"
             echo "clang_path=$CLANG_PATH"
             echo "clang_version=$CLANG_VER"
@@ -709,22 +287,34 @@ jobs:
             echo "run_url=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } | tee "$OUT_DIR/provenance.txt"
 
-      - name: Archive verified kernel
+      - name: Compress vmlinux
+        run: |
+          mkdir -p out/vmlinux-dist
+          zip -9 out/vmlinux-dist/vmlinux.zip out/vmlinux
+          test -s out/vmlinux-dist/vmlinux.zip
+
+      - name: Archive kernel Image
         uses: actions/upload-artifact@v4
         with:
-          name: CPH2609-OOS14-KSUN-SUSFS-kernel
+          name: CPH2609-810-GKI-KSUN-SUSFS-kernel
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+          path: |
+            out/arch/arm64/boot/Image
+            out/.config
+            out/System.map
+            out/provenance.txt
+            out/include/config/kernel.release
+            out/include/generated/utsrelease.h
+
+      - name: Archive compressed vmlinux
+        uses: actions/upload-artifact@v4
+        with:
+          name: CPH2609-810-GKI-KSUN-SUSFS-vmlinux
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
           path: |
-            out/arch/arm64/boot/Image
-            out/.config
-            out/.config.v4a
-            out/.config.v3
-            out/System.map
-            out/Module.symvers
-            out/vmlinux
-            out/verification.txt
-            out/provenance.txt
-            out-v1/.config
-            out-v1/.config.v2
+            out/vmlinux-dist/vmlinux.zip
