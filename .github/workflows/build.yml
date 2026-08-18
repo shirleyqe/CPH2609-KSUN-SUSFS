@@ -92,6 +92,20 @@ jobs:
               "kernel_umount.h handler guard",
           )
           replace(
+              "kernel_umount.c",
+              "#if !defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n"
+              "static void umount_tw_func(struct callback_head *cb)",
+              "static void umount_tw_func(struct callback_head *cb)",
+              "kernel_umount.c handler guard",
+          )
+          replace(
+              "kernel_umount.c",
+              "#endif // #if defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n\n"
+              "void ksu_kernel_umount_init(void)",
+              "void ksu_kernel_umount_init(void)",
+              "kernel_umount.c handler footer",
+          )
+          replace(
               "setuid_hook.c",
               "extern void susfs_run_sus_path_loop(uid_t uid);",
               "extern void susfs_run_sus_path_loop(void);",
