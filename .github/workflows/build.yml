@@ -272,30 +272,6 @@ jobs:
           )):
               raise SystemExit("incompatible legacy KernelSU SUSFS symbol remains")
 
-          memory_old = "\n".join([
-              "@@ -74,6 +74,9 @@",
-              " #include <linux/perf_event.h>",
-              " #include <linux/ptrace.h>",
-              " #include <linux/vmalloc.h>",
-              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              "+#include <linux/susfs_def.h>",
-              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              " #include <trace/hooks/mm.h>",
-              " ",
-              " #include <trace/events/kmem.h>",
-          ]) + "\n"
-          memory_new = "\n".join([
-              "@@ -75,6 +75,9 @@",
-              " #include <linux/ptrace.h>",
-              " #include <linux/vmalloc.h>",
-              " #include <linux/swap_slots.h>",
-              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              "+#include <linux/susfs_def.h>",
-              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
-              " #include <trace/hooks/mm.h>",
-              " ",
-              " #include <trace/events/kmem.h>",
-          ]) + "\n"
           namei_old = "\n".join([
               "@@ -1565,6 +1590,17 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
               " \t\tdput(dentry);",
@@ -361,7 +337,6 @@ jobs:
               "+",
           ]) + "\n"
           replacements = [
-              ("memory.c", memory_old, memory_new),
               ("namei.c", namei_old, namei_new),
               ("task_mmu.c", task_old, task_new),
           ]
