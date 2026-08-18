@@ -30,11 +30,10 @@ jobs:
       - name: Fetch Google ACK 5.15 GKI source
         run: |
           mkdir -p kernel_platform
-          git clone --filter=blob:none \
+          git clone --depth 1 \
+            --branch android13-5.15-2024-01_r6 \
             https://android.googlesource.com/kernel/common \
             kernel_platform/common
-          git -C kernel_platform/common checkout \
-            70fb7171ac59337b053b5b9930050862fc8c6d44
           test "$(git -C kernel_platform/common rev-parse HEAD)" = \
             70fb7171ac59337b053b5b9930050862fc8c6d44
           mkdir -p prebuilts/clang/host/linux-x86/clang-r450784e
@@ -181,12 +180,216 @@ jobs:
           path.write_text(text.replace(old, "void susfs_run_sus_path_loop(void)"),
                           encoding="utf-8")
           PY
+          SUSFS_PATCH=kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
+          ADAPTED_PATCH="$RUNNER_TEMP/50_add_susfs_in_gki-android13-5.15-gki.patch"
+          python3 - "$SUSFS_PATCH" "$ADAPTED_PATCH" <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          text = source.read_text(encoding="utf-8")
+
+          def remove_between(value, start, end, label):
+              if value.count(start) != 1 or value.count(end) != 1:
+                  raise SystemExit(f"unexpected SUSFS {label} hunk boundary")
+              begin = value.index(start)
+              finish = value.index(end, begin)
+              return value[:begin] + value[finish:]
+
+          def replace_exact(value, old, new, expected, label):
+              if value.count(old) != expected:
+                  raise SystemExit(f"unexpected SUSFS {label} replacement count")
+              return value.replace(old, new)
+
+          for path in (
+              "drivers/input/input.c",
+              "fs/read_write.c",
+              "security/selinux/hooks.c",
+              "security/selinux/selinuxfs.c",
+          ):
+              start = f"diff --git a/{path} b/{path}\n"
+              if text.count(start) != 1:
+                  raise SystemExit(f"unexpected SUSFS {path} patch count")
+              begin = text.index(start)
+              finish = text.find("diff --git ", begin + len(start))
+              if finish < 0:
+                  finish = len(text)
+              text = text[:begin] + text[finish:]
+
+          text = remove_between(
+              text,
+              "@@ -171,6 +195,13 @@ EXPORT_SYMBOL_NS(vfs_getattr, ANDROID_GKI_VFS_EXPORT_ONLY);\n",
+              "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
+              "fs/stat.c fstat declaration")
+          text = remove_between(
+              text,
+              "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
+              "@@ -206,6 +251,18 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
+              "fs/stat.c fstat hook")
+          tab = chr(9)
+          stat_declarations = "\n".join([
+              "+#ifdef CONFIG_KSU_SUSFS",
+              "+" + tab + "extern bool ksu_su_compat_enabled;",
+              "+" + tab + "extern bool __ksu_is_allow_uid_for_current(uid_t uid);",
+              "+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)",
+              "+" + tab + "extern int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);",
+              "+#else",
+              "+" + tab + "extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);",
+              "+#endif",
+              "+#endif",
+              "+",
+          ]) + "\n"
+          stat_marker = " \tint error;\n \n+#ifdef CONFIG_KSU_SUSFS\n+" + tab + "if (likely(susfs_is_current_proc_umounted()))"
+          if text.count(stat_marker) != 1:
+              raise SystemExit("unexpected SUSFS fs/stat.c statx hunk")
+          stat_prefix = " \tint error;\n \n"
+          text = text.replace(stat_marker, stat_prefix + stat_declarations + stat_marker[len(stat_prefix):])
+          text = replace_exact(
+              text,
+              "@@ -206,6 +251,18 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
+              "@@ -206,6 +251,28 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
+              1,
+              "fs/stat.c statx hunk size")
+          text = replace_exact(
+              text,
+              "+extern struct static_key_true ksu_su_compat_enabled;\n",
+              "+extern bool ksu_su_compat_enabled;\n",
+              2,
+              "sucompat declaration")
+          text = replace_exact(
+              text,
+              "+\tif (static_branch_likely(&ksu_su_compat_enabled))",
+              "+\tif (ksu_su_compat_enabled)",
+              3,
+              "sucompat branch")
+          if any(symbol in text for symbol in (
+              "ksu_is_init_rc_hook_enabled",
+              "ksu_is_input_hook_enabled",
+              "ksu_handle_vfs_fstat",
+              "ksu_selinux_hide_running",
+              "fake_status_initialize_key",
+          )):
+              raise SystemExit("incompatible legacy KernelSU SUSFS symbol remains")
+
+          memory_old = "\n".join([
+              "@@ -74,6 +74,9 @@",
+              " #include <linux/perf_event.h>",
+              " #include <linux/ptrace.h>",
+              " #include <linux/vmalloc.h>",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+#include <linux/susfs_def.h>",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              " #include <trace/hooks/mm.h>",
+              " ",
+              " #include <trace/events/kmem.h>",
+          ]) + "\n"
+          memory_new = "\n".join([
+              "@@ -76,1 +76,4 @@",
+              "-#include <linux/swap_slots.h>",
+              "+#include <linux/swap_slots.h>",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+#include <linux/susfs_def.h>",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+          ]) + "\n"
+          namei_old = "\n".join([
+              "@@ -1565,6 +1590,17 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
+              " \t\tdput(dentry);",
+              " \t\tdentry = old;",
+              " \t}",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_PATH",
+              "+\tif (unlikely(dentry) && !IS_ERR(dentry) && dentry->d_inode && !found_sus_path && susfs_is_inode_sus_path(dentry->d_inode)) {",
+              "+\t\tif (d_in_lookup(dentry))",
+              "+\t\t\td_lookup_done(dentry);",
+              "+\t\tif (!(flags & LOOKUP_RCU))",
+              "+\t\t\tdput(dentry);",
+              "+\t\tdentry = d_alloc(base, &susfs_fake_qstr_name);",
+              "+\t\tfound_sus_path = true;",
+              "+\t\tgoto retry;",
+              "+\t}",
+              "+#endif",
+              " \treturn dentry;",
+              " }",
+              " EXPORT_SYMBOL(lookup_one_qstr_excl);",
+          ]) + "\n"
+          namei_new = "\n".join([
+              "@@ -1566,1 +1566,12 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
+              "-\t\tdentry = old;",
+              "+\t\tdentry = old;",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_PATH",
+              "+\tif (unlikely(dentry) && !IS_ERR(dentry) && dentry->d_inode && !found_sus_path && susfs_is_inode_sus_path(dentry->d_inode)) {",
+              "+\t\tif (d_in_lookup(dentry))",
+              "+\t\t\td_lookup_done(dentry);",
+              "+\t\tif (!(flags & LOOKUP_RCU))",
+              "+\t\t\tdput(dentry);",
+              "+\t\tdentry = d_alloc(base, &susfs_fake_qstr_name);",
+              "+\t\tfound_sus_path = true;",
+              "+\t\tgoto retry;",
+              "+\t}",
+              "+#endif",
+          ]) + "\n"
+          task_old = "\n".join([
+              "@@ -857,6 +895,13 @@ static int show_smap(struct seq_file *m, void *v)",
+              " \tstruct vm_area_struct *vma = v;",
+              " \tstruct mem_size_stats mss;",
+              " ",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+\tif (vma->vm_file) {",
+              "+\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))",
+              "+\t\t\treturn 0;",
+              "+\t}",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+",
+              " \tmemset(&mss, 0, sizeof(mss));",
+              " ",
+              " \tif (!vma_pages(vma))",
+          ]) + "\n"
+          task_new = "\n".join([
+              "@@ -860,1 +860,8 @@ static int show_smap(struct seq_file *m, void *v)",
+              "-\tmemset(&mss, 0, sizeof(mss));",
+              "+\tmemset(&mss, 0, sizeof(mss));",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+\tif (vma->vm_file) {",
+              "+\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))",
+              "+\t\t\treturn 0;",
+              "+\t}",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+",
+          ]) + "\n"
+          replacements = [
+              ("memory.c", memory_old, memory_new),
+              ("namei.c", namei_old, namei_new),
+              ("task_mmu.c", task_old, task_new),
+          ]
+          for name, old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f"unexpected SUSFS {name} hunk count")
+              text = text.replace(old, new)
+          destination.write_text(text, encoding="utf-8")
+          PY
           patch --batch --fuzz=0 --no-backup-if-mismatch \
             -d kernel_platform/common -p1 \
-            < kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
+            < "$ADAPTED_PATCH"
           test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
           grep -q '#include <linux/susfs_def.h>' kernel_platform/common/mm/memory.c
           grep -q 'CONFIG_KSU_SUSFS_SUS_MAP' kernel_platform/common/mm/memory.c
+          python3 - kernel_platform/common/fs/proc/task_mmu.c <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          include = "#include <linux/susfs_def.h>\n"
+          compatibility = (include +
+                          "#ifndef VMA_PAD_START\n"
+                          "#define VMA_PAD_START(vma) (vma->vm_end)\n"
+                          "#endif\n")
+          if text.count(include) != 1:
+              raise SystemExit("unexpected task_mmu.c SUSFS include count")
+          path.write_text(text.replace(include, compatibility), encoding="utf-8")
+          PY
+          grep -q '#define VMA_PAD_START' kernel_platform/common/fs/proc/task_mmu.c
+          test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
 
       - name: Configure GKI Kernel
         run: |
@@ -274,7 +477,7 @@ jobs:
             echo "variant=GKI_ACK_5.15_KSUN_SUSFS"
             echo "device=CPH2609"
             echo "firmware=CPH2609_14.0.0.810(EX01)"
-            echo "kernel_tree=Google ACK android13-5.15"
+            echo "kernel_tree=Google ACK android13-5.15-2024-01_r6@70fb7171ac59337b053b5b9930050862fc8c6d44"
             echo "ksun=v3.1.0-legacy-susfs@ba4422f0556e10f40dda1887631d87a18ede4ec5"
             echo "susfs=gki-android13-5.15@ccb1918684b27644d17a6c842f57b60ae5966025"
             echo "uts_release=$KERNEL_RELEASE"
