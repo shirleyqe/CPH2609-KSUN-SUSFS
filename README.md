@@ -20,6 +20,9 @@ OxygenOS 14 `.810` control status:
   `F2FS_APPBOOST` and `F2FS_FS_DEDUP` changes and is built without KSU/SUSFS.
 - ACK control artifacts must pass stock config and OEM module CRC audits before
   they are eligible for a device boot test.
+- `ACK-CONTROL-V1` passed those gates and booted `.810` successfully on the
+  CPH2609. The same workflow now supports a `ksun` variant so KernelSU Next can
+  be isolated and tested before any SUSFS patch is added.
 
 Toolchain note: the stock `.831(EX01)` boot kernel was compiled with clang
 `r450784e` ("Android (8508608, based on r450784e)"). V3 pulls the matching
