@@ -78,11 +78,11 @@ jobs:
         working-directory: kernel_platform/common
         run: |
           curl --fail --location --silent --show-error \
-            https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0-legacy-susfs/kernel/setup.sh \
-            | bash -s v3.1.0-legacy-susfs
+            https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0/kernel/setup.sh \
+            | bash -s v3.1.0
           test -d KernelSU-Next
           test "$(git -C KernelSU-Next rev-parse HEAD)" = \
-            ba4422f0556e10f40dda1887631d87a18ede4ec5
+            4855fa3a844579eca5171aae7f3805fd72729b56
 
       - name: Configure production ACK control
         run: |
@@ -101,9 +101,7 @@ jobs:
             --set-str LOCALVERSION "-android13-8-00760-gf490405820f7" \
             --disable LOCALVERSION_AUTO
           if [ "${{ inputs.variant }}" = ksun ]; then
-            "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
-              --enable KSU \
-              --disable KSU_SUSFS
+            "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" --enable KSU
           fi
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
           : > "$KERNEL_DIR/.scmversion"
@@ -118,7 +116,6 @@ jobs:
             "$OUT_DIR/.config"
           if [ "${{ inputs.variant }}" = ksun ]; then
             grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config"
-            grep -q '^# CONFIG_KSU_SUSFS is not set$' "$OUT_DIR/.config"
           elif grep -q '^CONFIG_KSU' "$OUT_DIR/.config"; then
             echo "KSU symbol leaked into ACK control" >&2
             exit 1
@@ -172,7 +169,7 @@ jobs:
             echo "vendor_tree=OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8550@6ada53700a567e0b92cebebccb49b74db720f96a"
             echo "common_release=OnePlus 11 OOS14 .810 public ACK (5.15.123)"
             if [ "${{ inputs.variant }}" = ksun ]; then
-              echo "ksun=v3.1.0-legacy-susfs@ba4422f0556e10f40dda1887631d87a18ede4ec5"
+              echo "ksun=v3.1.0@4855fa3a844579eca5171aae7f3805fd72729b56"
             else
               echo "ksun=none"
             fi
