@@ -262,6 +262,17 @@ jobs:
 
           text = remove_between(
               text,
+              "diff --git a/fs/Makefile b/fs/Makefile\n",
+              "diff --git a/fs/exec.c b/fs/exec.c\n",
+              "fs/Makefile")
+          text = remove_between(
+              text,
+              "@@ -74,6 +74,9 @@\n",
+              "@@ -5664,12 +5667,21 @@ int __access_remote_vm(struct mm_struct *mm, unsigned long addr, void *buf,\n",
+              "mm/memory.c include")
+
+          text = remove_between(
+              text,
               "@@ -171,6 +195,13 @@ EXPORT_SYMBOL_NS(vfs_getattr, ANDROID_GKI_VFS_EXPORT_ONLY);\n",
               "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
               "fs/stat.c fstat declaration")
@@ -388,6 +399,32 @@ jobs:
                   raise SystemExit(f"unexpected SUSFS {name} hunk count")
               text = text.replace(old, new)
           destination.write_text(text, encoding="utf-8")
+          PY
+          python3 - kernel_platform/common/fs/Makefile kernel_platform/common/mm/memory.c <<'PY'
+          from pathlib import Path
+          import sys
+
+          fs_makefile = Path(sys.argv[1])
+          text = fs_makefile.read_text(encoding="utf-8")
+          anchor = "\t\tkernel_read_file.o remap_range.o\n\nPGO_PROFILE_xattr.o := n\n"
+          replacement = ("\t\tkernel_read_file.o remap_range.o\n\n"
+                         "obj-$(CONFIG_KSU_SUSFS) += susfs.o\n\n"
+                         "PGO_PROFILE_xattr.o := n\n")
+          if text.count(anchor) != 1:
+              raise SystemExit("unexpected OnePlus fs/Makefile SUSFS anchor")
+          fs_makefile.write_text(text.replace(anchor, replacement), encoding="utf-8")
+
+          memory = Path(sys.argv[2])
+          text = memory.read_text(encoding="utf-8")
+          anchor = "#include <linux/swap_slots.h>\n#include <trace/hooks/mm.h>\n"
+          replacement = ("#include <linux/swap_slots.h>\n"
+                         "#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n"
+                         "#include <linux/susfs_def.h>\n"
+                         "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n"
+                         "#include <trace/hooks/mm.h>\n")
+          if text.count(anchor) != 1:
+              raise SystemExit("unexpected OnePlus mm/memory.c SUSFS include anchor")
+          memory.write_text(text.replace(anchor, replacement), encoding="utf-8")
           PY
           patch --batch --fuzz=0 --no-backup-if-mismatch \
             -d kernel_platform/common -p1 \
