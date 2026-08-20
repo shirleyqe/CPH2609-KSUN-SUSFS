@@ -10,6 +10,17 @@ Pinned inputs:
 - SUSFS: Android 13 GKI 5.15 (`ccb1918684b27644d17a6c842f57b60ae5966025`)
 - Public Android Clang: `r450784e` from `android14-release`
 
+OxygenOS 14 `.810` control status:
+
+- `CONTROL-V2` is confirmed not bootable. It incorrectly built the QCOM
+  `msm-kernel` tree as the boot kernel even though the production kalama build
+  is a mixed build whose boot `Image` comes from the separate ACK `common` tree.
+- `ACK-CONTROL-V1` pins the public OnePlus ACK 5.15.123 release commit
+  `4a62ecfd0ea4e2a3ffb932921133a6f499968574`. It contains the stock-required
+  `F2FS_APPBOOST` and `F2FS_FS_DEDUP` changes and is built without KSU/SUSFS.
+- ACK control artifacts must pass stock config and OEM module CRC audits before
+  they are eligible for a device boot test.
+
 Toolchain note: the stock `.831(EX01)` boot kernel was compiled with clang
 `r450784e` ("Android (8508608, based on r450784e)"). V3 pulls the matching
 public tarball from `android14-release` (`clang-r450784e.tar.gz`) and asserts

@@ -1,0 +1,156 @@
+name: Build CPH2609 810 ACK CONTROL (no KSU/SUSFS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kernel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim runner disk
+        run: |
+          timeout 300 sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
+            /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential cpio curl flex git \
+            libelf-dev libssl-dev lld llvm lz4 pahole rsync xz-utils zstd
+
+      - name: Fetch pinned OnePlus ACK and toolchain
+        run: |
+          mkdir -p kernel_platform/common
+          git -C kernel_platform/common init
+          git -C kernel_platform/common remote add origin \
+            https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8550.git
+          git -C kernel_platform/common fetch --depth 1 origin \
+            4a62ecfd0ea4e2a3ffb932921133a6f499968574
+          git -C kernel_platform/common checkout --detach FETCH_HEAD
+          test "$(git -C kernel_platform/common rev-parse HEAD)" = \
+            4a62ecfd0ea4e2a3ffb932921133a6f499968574
+
+          mkdir -p prebuilts/clang/host/linux-x86/clang-r450784e
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 \
+            --max-time 1500 \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android14-release/clang-r450784e.tar.gz \
+            | tar -xz -C prebuilts/clang/host/linux-x86/clang-r450784e
+          prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang --version \
+            | tee "$RUNNER_TEMP/clang-version.txt"
+          grep -F 'r450784e' "$RUNNER_TEMP/clang-version.txt"
+          grep -E 'clang version 14\.0\.7' "$RUNNER_TEMP/clang-version.txt"
+
+      - name: Add swap
+        run: |
+          sudo fallocate -l 12G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+          free -h
+
+      - name: Configure production ACK control
+        run: |
+          export KERNEL_DIR="$PWD/kernel_platform/common"
+          export OUT_DIR="$PWD/out"
+          export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+
+          make -C "$KERNEL_DIR" O="$OUT_DIR" gki_defconfig
+          "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+            --disable TRIM_UNUSED_KSYMS \
+            --undefine UNUSED_KSYMS_WHITELIST \
+            --set-str LOCALVERSION "-android13-8-00760-gf490405820f7" \
+            --disable LOCALVERSION_AUTO
+          make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
+          : > "$KERNEL_DIR/.scmversion"
+
+          grep -q '^CONFIG_F2FS_APPBOOST=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_F2FS_FS_DEDUP=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_LTO_CLANG_FULL=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_CFI_CLANG=y$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_MODVERSIONS=y$' "$OUT_DIR/.config"
+          grep -q '^# CONFIG_TRIM_UNUSED_KSYMS is not set$' "$OUT_DIR/.config"
+          grep -q '^CONFIG_LOCALVERSION="-android13-8-00760-gf490405820f7"$' \
+            "$OUT_DIR/.config"
+          if grep -q '^CONFIG_KSU' "$OUT_DIR/.config"; then
+            echo "KSU symbol leaked into ACK control" >&2
+            exit 1
+          fi
+          cp "$OUT_DIR/.config" "$OUT_DIR/.config.control"
+
+      - name: Build ACK kernel Image
+        run: |
+          export KERNEL_DIR="$PWD/kernel_platform/common"
+          export OUT_DIR="$PWD/out"
+          export PATH="$PWD/prebuilts/clang/host/linux-x86/clang-r450784e/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export KMI_GENERATION=8
+          export BRANCH=android13-5.15
+          export LOCALVERSION=""
+          export KBUILD_BUILD_VERSION=1
+          make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
+
+      - name: Verify ACK control
+        run: |
+          export OUT_DIR="$PWD/out"
+          KERNEL_RELEASE="$(cat "$OUT_DIR/include/config/kernel.release")"
+          IMAGE_SIZE="$(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
+          IMAGE_SHA="$(sha256sum "$OUT_DIR/arch/arm64/boot/Image" | awk '{print $1}')"
+          CLANG_VER="$(prebuilts/clang/host/linux-x86/clang-r450784e/bin/clang --version | head -n1)"
+
+          test "$KERNEL_RELEASE" = \
+            "5.15.123-android13-8-00760-gf490405820f7"
+          grep -a "Linux version $KERNEL_RELEASE" "$OUT_DIR/arch/arm64/boot/Image"
+          test "$(grep -a -c 'KernelSU' "$OUT_DIR/arch/arm64/boot/Image" || true)" = 0
+          test "$(grep -a -c -E 'susfs|KSU_SUSFS' "$OUT_DIR/arch/arm64/boot/Image" || true)" = 0
+
+          diff -u stock-config/stock_config_810.txt "$OUT_DIR/.config" \
+            > "$OUT_DIR/config-vs-stock.diff" || true
+          {
+            echo "variant=ACK_CONTROL_V1"
+            echo "device=CPH2609"
+            echo "firmware=CPH2609_14.0.0.810(EX01)"
+            echo "common_tree=OnePlusOSS/android_kernel_common_oneplus_sm8550@4a62ecfd0ea4e2a3ffb932921133a6f499968574"
+            echo "common_release=OnePlus 11 OOS14 .810 public ACK (5.15.123)"
+            echo "ksun=none"
+            echo "susfs=none"
+            echo "uts_release=$KERNEL_RELEASE"
+            echo "config_base=arch/arm64/configs/gki_defconfig"
+            echo "config_delta=TRIM_UNUSED_KSYMS=n; stock UTS compatibility"
+            echo "clang_version=$CLANG_VER"
+            echo "image_size=$IMAGE_SIZE"
+            echo "image_sha256=$IMAGE_SHA"
+            echo "git_commit=${GITHUB_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_url=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } | tee "$OUT_DIR/provenance.txt"
+
+      - name: Archive ACK control
+        uses: actions/upload-artifact@v4
+        with:
+          name: CPH2609-810-ACK-CONTROL-V1
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+          path: |
+            out/arch/arm64/boot/Image
+            out/.config
+            out/.config.control
+            out/System.map
+            out/Module.symvers
+            out/config-vs-stock.diff
+            out/provenance.txt
+            out/include/config/kernel.release
+            out/include/generated/utsrelease.h
