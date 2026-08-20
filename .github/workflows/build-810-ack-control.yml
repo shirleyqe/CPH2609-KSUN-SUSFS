@@ -1,4 +1,4 @@
-name: Build CPH2609 810 ACK control or KSUN
+name: Build CPH2609 810 ACK control / KSUN / KSUN-SUSFS
 
 on:
   workflow_dispatch:
@@ -11,6 +11,7 @@ on:
         options:
           - control
           - ksun
+          - ksun-susfs
 
 jobs:
   kernel:
@@ -30,7 +31,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential cpio curl flex git \
-            libelf-dev libssl-dev lld llvm lz4 pahole rsync xz-utils zstd
+            libelf-dev libssl-dev lld llvm lz4 pahole patch python3 rsync xz-utils \
+            zstd
 
       - name: Fetch pinned OnePlus ACK and toolchain
         run: |
@@ -74,17 +76,344 @@ jobs:
           free -h
 
       - name: Integrate KernelSU Next
-        if: inputs.variant == 'ksun'
+        if: inputs.variant == 'ksun' || inputs.variant == 'ksun-susfs'
         working-directory: kernel_platform/common
         run: |
-          curl --fail --location --silent --show-error \
-            https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0/kernel/setup.sh \
-            | bash -s v3.1.0
+          if [ "${{ inputs.variant }}" = ksun ]; then
+            curl --fail --location --silent --show-error \
+              https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0/kernel/setup.sh \
+              | bash -s v3.1.0
+            test "$(git -C KernelSU-Next rev-parse HEAD)" = \
+              4855fa3a844579eca5171aae7f3805fd72729b56
+          else
+            curl --fail --location --silent --show-error \
+              https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0-legacy-susfs/kernel/setup.sh \
+              | bash -s v3.1.0-legacy-susfs
+            test "$(git -C KernelSU-Next rev-parse HEAD)" = \
+              ba4422f0556e10f40dda1887631d87a18ede4ec5
+          fi
           test -d KernelSU-Next
-          test "$(git -C KernelSU-Next rev-parse HEAD)" = \
-            4855fa3a844579eca5171aae7f3805fd72729b56
 
-      - name: Configure production ACK control
+      - name: Patch KernelSU-Next for legacy-susfs compatibility
+        if: inputs.variant == 'ksun-susfs'
+        working-directory: kernel_platform/common
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path("KernelSU-Next/kernel")
+
+          def replace(path, old, new, label):
+              file = root / path
+              text = file.read_text(encoding="utf-8")
+              if text.count(old) != 1:
+                  raise SystemExit(f"unexpected {label} replacement count")
+              file.write_text(text.replace(old, new), encoding="utf-8")
+
+          replace(
+              "kernel_umount.h",
+              "#if !defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n"
+              " // Handler function to be called from setresuid hook\n"
+              " int ksu_handle_umount(uid_t old_uid, uid_t new_uid);\n"
+              "#endif\n",
+              " // Handler function to be called from setresuid hook\n"
+              " int ksu_handle_umount(uid_t old_uid, uid_t new_uid);\n",
+              "kernel_umount.h handler guard",
+          )
+          replace(
+              "kernel_umount.c",
+              "#if !defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n"
+              "static void umount_tw_func(struct callback_head *cb)",
+              "static void umount_tw_func(struct callback_head *cb)",
+              "kernel_umount.c handler guard",
+          )
+          replace(
+              "kernel_umount.c",
+              "#endif // #if defined(CONFIG_KSU_SUSFS) || !defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n\n"
+              "void ksu_kernel_umount_init(void)",
+              "void ksu_kernel_umount_init(void)",
+              "kernel_umount.c handler footer",
+          )
+          replace(
+              "setuid_hook.c",
+              "extern void susfs_run_sus_path_loop(uid_t uid);",
+              "extern void susfs_run_sus_path_loop(void);",
+              "setuid path declaration",
+          )
+          for old in (
+              "extern void susfs_reorder_mnt_id(void);\n",
+              "extern void susfs_try_umount(uid_t uid);\n",
+              "    susfs_reorder_mnt_id();\n",
+          ):
+              replace("setuid_hook.c", old, "", "setuid deprecated declaration/call")
+          replace(
+              "setuid_hook.c",
+              "    susfs_try_umount(new_uid);",
+              "    ksu_handle_umount(old_uid, new_uid);",
+              "setuid umount handler",
+          )
+          replace(
+              "setuid_hook.c",
+              "    susfs_run_sus_path_loop(new_uid);",
+              "    susfs_run_sus_path_loop();",
+              "setuid path loop call",
+          )
+          replace(
+              "supercalls.c",
+              "\n".join([
+                  "        if (cmd == CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH) {",
+                  "            susfs_set_i_state_on_external_dir(arg);",
+                  "            return 0;",
+                  "        }",
+                  "        if (cmd == CMD_SUSFS_SET_SDCARD_ROOT_PATH) {",
+                  "            susfs_set_i_state_on_external_dir(arg);",
+                  "            return 0;",
+                  "        }",
+              ]) + "\n",
+              "",
+              "deprecated SUSFS path handlers",
+          )
+          replace(
+              "supercalls.c",
+              "\n".join([
+                  "#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT",
+                  "        if (cmd == CMD_SUSFS_ADD_TRY_UMOUNT) {",
+                  "            susfs_add_try_umount(arg);",
+                  "            return 0;",
+                  "        }",
+                  "#endif //#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT",
+              ]) + "\n",
+              "",
+              "deprecated SUSFS try_umount handler",
+          )
+          PY
+          if grep -REq \
+            'susfs_try_umount|susfs_reorder_mnt_id|susfs_set_i_state_on_external_dir|susfs_add_try_umount' \
+            KernelSU-Next/kernel/setuid_hook.c KernelSU-Next/kernel/supercalls.c; then
+            echo "deprecated SUSFS command handler remains in KernelSU-Next"
+            exit 1
+          fi
+
+      - name: Integrate SUSFS
+        if: inputs.variant == 'ksun-susfs'
+        run: |
+          git clone --branch gki-android13-5.15 \
+            https://github.com/ShirkNeko/susfs4ksu.git \
+            kernel_platform/susfs4ksu
+          git -C kernel_platform/susfs4ksu checkout \
+            ccb1918684b27644d17a6c842f57b60ae5966025
+          test "$(git -C kernel_platform/susfs4ksu rev-parse HEAD)" = \
+            ccb1918684b27644d17a6c842f57b60ae5966025
+          test -f kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch
+          test -f kernel_platform/susfs4ksu/kernel_patches/fs/susfs.c
+          test -f kernel_platform/susfs4ksu/kernel_patches/include/linux/susfs.h
+          test -f kernel_platform/susfs4ksu/kernel_patches/include/linux/susfs_def.h
+          cp kernel_platform/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch \
+            kernel_platform/common/
+          cp kernel_platform/susfs4ksu/kernel_patches/fs/* kernel_platform/common/fs/
+          cp kernel_platform/susfs4ksu/kernel_patches/include/linux/* \
+            kernel_platform/common/include/linux/
+          python3 - kernel_platform/common/fs/susfs.c <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          old = "static void susfs_run_sus_path_loop(void)"
+          if text.count(old) != 1:
+              raise SystemExit("unexpected SUSFS path-loop definition")
+          path.write_text(text.replace(old, "void susfs_run_sus_path_loop(void)"),
+                          encoding="utf-8")
+          PY
+          SUSFS_PATCH=kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
+          ADAPTED_PATCH="$RUNNER_TEMP/50_add_susfs_in_gki-android13-5.15-gki.patch"
+          python3 - "$SUSFS_PATCH" "$ADAPTED_PATCH" <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          text = source.read_text(encoding="utf-8")
+
+          def remove_between(value, start, end, label):
+              if value.count(start) != 1 or value.count(end) != 1:
+                  raise SystemExit(f"unexpected SUSFS {label} hunk boundary")
+              begin = value.index(start)
+              finish = value.index(end, begin)
+              return value[:begin] + value[finish:]
+
+          def replace_exact(value, old, new, expected, label):
+              if value.count(old) != expected:
+                  raise SystemExit(f"unexpected SUSFS {label} replacement count")
+              return value.replace(old, new)
+
+          for path in (
+              "drivers/input/input.c",
+              "fs/read_write.c",
+              "security/selinux/hooks.c",
+              "security/selinux/selinuxfs.c",
+          ):
+              start = f"diff --git a/{path} b/{path}\n"
+              if text.count(start) != 1:
+                  raise SystemExit(f"unexpected SUSFS {path} patch count")
+              begin = text.index(start)
+              finish = text.find("diff --git ", begin + len(start))
+              if finish < 0:
+                  finish = len(text)
+              text = text[:begin] + text[finish:]
+
+          text = remove_between(
+              text,
+              "@@ -171,6 +195,13 @@ EXPORT_SYMBOL_NS(vfs_getattr, ANDROID_GKI_VFS_EXPORT_ONLY);\n",
+              "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
+              "fs/stat.c fstat declaration")
+          text = remove_between(
+              text,
+              "@@ -180,10 +211,24 @@ int vfs_fstat(int fd, struct kstat *stat)\n",
+              "@@ -206,6 +251,18 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
+              "fs/stat.c fstat hook")
+          tab = chr(9)
+          stat_declarations = "\n".join([
+              "+#ifdef CONFIG_KSU_SUSFS",
+              "+" + tab + "extern bool ksu_su_compat_enabled;",
+              "+" + tab + "extern bool __ksu_is_allow_uid_for_current(uid_t uid);",
+              "+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)",
+              "+" + tab + "extern int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);",
+              "+#else",
+              "+" + tab + "extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);",
+              "+#endif",
+              "+#endif",
+              "+",
+          ]) + "\n"
+          stat_marker = " \tint error;\n \n+#ifdef CONFIG_KSU_SUSFS\n+" + tab + "if (likely(susfs_is_current_proc_umounted()))"
+          if text.count(stat_marker) != 1:
+              raise SystemExit("unexpected SUSFS fs/stat.c statx hunk")
+          stat_prefix = " \tint error;\n \n"
+          text = text.replace(stat_marker, stat_prefix + stat_declarations + stat_marker[len(stat_prefix):])
+          text = replace_exact(
+              text,
+              "@@ -206,6 +251,18 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
+              "@@ -206,6 +251,28 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
+              1,
+              "fs/stat.c statx hunk size")
+          text = replace_exact(
+              text,
+              "+extern struct static_key_true ksu_su_compat_enabled;\n",
+              "+extern bool ksu_su_compat_enabled;\n",
+              2,
+              "sucompat declaration")
+          text = replace_exact(
+              text,
+              "+\tif (static_branch_likely(&ksu_su_compat_enabled))",
+              "+\tif (ksu_su_compat_enabled)",
+              3,
+              "sucompat branch")
+          if any(symbol in text for symbol in (
+              "ksu_is_init_rc_hook_enabled",
+              "ksu_is_input_hook_enabled",
+              "ksu_handle_vfs_fstat",
+              "ksu_selinux_hide_running",
+              "fake_status_initialize_key",
+          )):
+              raise SystemExit("incompatible legacy KernelSU SUSFS symbol remains")
+
+          namei_old = "\n".join([
+              "@@ -1565,6 +1590,17 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
+              " \t\tdput(dentry);",
+              " \t\tdentry = old;",
+              " \t}",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_PATH",
+              "+\tif (unlikely(dentry) && !IS_ERR(dentry) && dentry->d_inode && !found_sus_path && susfs_is_inode_sus_path(dentry->d_inode)) {",
+              "+\t\tif (d_in_lookup(dentry))",
+              "+\t\t\td_lookup_done(dentry);",
+              "+\t\tif (!(flags & LOOKUP_RCU))",
+              "+\t\t\tdput(dentry);",
+              "+\t\tdentry = d_alloc(base, &susfs_fake_qstr_name);",
+              "+\t\tfound_sus_path = true;",
+              "+\t\tgoto retry;",
+              "+\t}",
+              "+#endif",
+              " \treturn dentry;",
+              " }",
+              " EXPORT_SYMBOL(lookup_one_qstr_excl);",
+          ]) + "\n"
+          namei_new = "\n".join([
+              "@@ -1566,1 +1566,12 @@ struct dentry *lookup_one_qstr_excl(const struct qstr *name,",
+              "-\t\tdentry = old;",
+              "+\t\tdentry = old;",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_PATH",
+              "+\tif (unlikely(dentry) && !IS_ERR(dentry) && dentry->d_inode && !found_sus_path && susfs_is_inode_sus_path(dentry->d_inode)) {",
+              "+\t\tif (d_in_lookup(dentry))",
+              "+\t\t\td_lookup_done(dentry);",
+              "+\t\tif (!(flags & LOOKUP_RCU))",
+              "+\t\t\tdput(dentry);",
+              "+\t\tdentry = d_alloc(base, &susfs_fake_qstr_name);",
+              "+\t\tfound_sus_path = true;",
+              "+\t\tgoto retry;",
+              "+\t}",
+              "+#endif",
+          ]) + "\n"
+          task_old = "\n".join([
+              "@@ -857,6 +895,13 @@ static int show_smap(struct seq_file *m, void *v)",
+              " \tstruct vm_area_struct *vma = v;",
+              " \tstruct mem_size_stats mss;",
+              " ",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+\tif (vma->vm_file) {",
+              "+\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))",
+              "+\t\t\treturn 0;",
+              "+\t}",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+",
+              " \tmemset(&mss, 0, sizeof(mss));",
+              " ",
+              " \tif (!vma_pages(vma))",
+          ]) + "\n"
+          task_new = "\n".join([
+              "@@ -860,1 +860,8 @@ static int show_smap(struct seq_file *m, void *v)",
+              "-\tmemset(&mss, 0, sizeof(mss));",
+              "+\tmemset(&mss, 0, sizeof(mss));",
+              "+#ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+\tif (vma->vm_file) {",
+              "+\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))",
+              "+\t\t\treturn 0;",
+              "+\t}",
+              "+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP",
+              "+",
+          ]) + "\n"
+          replacements = [
+              ("namei.c", namei_old, namei_new),
+              ("task_mmu.c", task_old, task_new),
+          ]
+          for name, old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f"unexpected SUSFS {name} hunk count")
+              text = text.replace(old, new)
+          destination.write_text(text, encoding="utf-8")
+          PY
+          patch --batch --fuzz=0 --no-backup-if-mismatch \
+            -d kernel_platform/common -p1 \
+            < "$ADAPTED_PATCH"
+          test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
+          grep -q '#include <linux/susfs_def.h>' kernel_platform/common/mm/memory.c
+          grep -q 'CONFIG_KSU_SUSFS_SUS_MAP' kernel_platform/common/mm/memory.c
+          python3 - kernel_platform/common/fs/proc/task_mmu.c <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          include = "#include <linux/susfs_def.h>\n"
+          compatibility = (include +
+                          "#ifndef VMA_PAD_START\n"
+                          "#define VMA_PAD_START(vma) (vma->vm_end)\n"
+                          "#endif\n")
+          if text.count(include) != 1:
+              raise SystemExit("unexpected task_mmu.c SUSFS include count")
+          path.write_text(text.replace(include, compatibility), encoding="utf-8")
+          PY
+          grep -q '#define VMA_PAD_START' kernel_platform/common/fs/proc/task_mmu.c
+          test -z "$(find kernel_platform/common -name '*.rej' -print -quit)"
+
+      - name: Configure production ACK kernel
         run: |
           export KERNEL_DIR="$PWD/kernel_platform/common"
           export OUT_DIR="$PWD/out"
@@ -100,8 +429,23 @@ jobs:
             --undefine UNUSED_KSYMS_WHITELIST \
             --set-str LOCALVERSION "-android13-8-00760-gf490405820f7" \
             --disable LOCALVERSION_AUTO
-          if [ "${{ inputs.variant }}" = ksun ]; then
+          if [ "${{ inputs.variant }}" = ksun ] || \
+             [ "${{ inputs.variant }}" = ksun-susfs ]; then
             "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" --enable KSU
+          fi
+          if [ "${{ inputs.variant }}" = ksun-susfs ]; then
+            "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+              --enable KSU_SUSFS \
+              --enable KSU_SUSFS_SUS_PATH \
+              --enable KSU_SUSFS_SUS_MAP \
+              --enable KSU_SUSFS_SUS_KSTAT \
+              --enable KSU_SUSFS_SUS_MOUNT \
+              --enable KSU_SUSFS_TRY_UMOUNT \
+              --enable KSU_SUSFS_OPEN_REDIRECT \
+              --enable KSU_SUSFS_SPOOF_UNAME \
+              --enable KSU_SUSFS_ENABLE_LOG \
+              --enable KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+              --enable KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
           fi
           make -C "$KERNEL_DIR" O="$OUT_DIR" olddefconfig
           : > "$KERNEL_DIR/.scmversion"
@@ -114,17 +458,31 @@ jobs:
           grep -q '^# CONFIG_TRIM_UNUSED_KSYMS is not set$' "$OUT_DIR/.config"
           grep -q '^CONFIG_LOCALVERSION="-android13-8-00760-gf490405820f7"$' \
             "$OUT_DIR/.config"
-          if [ "${{ inputs.variant }}" = ksun ]; then
+          if [ "${{ inputs.variant }}" = ksun ] || \
+             [ "${{ inputs.variant }}" = ksun-susfs ]; then
             grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config"
           elif grep -q '^CONFIG_KSU' "$OUT_DIR/.config"; then
             echo "KSU symbol leaked into ACK control" >&2
             exit 1
           fi
-          if grep -q '^CONFIG_KSU_SUSFS.*=y$' "$OUT_DIR/.config"; then
+          if [ "${{ inputs.variant }}" = ksun-susfs ]; then
+            grep -q '^CONFIG_KSU_SUSFS=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_SUS_PATH=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_SUS_MAP=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_SUS_KSTAT=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_SUS_MOUNT=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_TRY_UMOUNT=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_OPEN_REDIRECT=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_SPOOF_UNAME=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_ENABLE_LOG=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y$' "$OUT_DIR/.config"
+            grep -q '^CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y$' \
+              "$OUT_DIR/.config"
+          elif grep -q '^CONFIG_KSU_SUSFS.*=y$' "$OUT_DIR/.config"; then
             echo "SUSFS symbol leaked into ACK control/KSUN-only build" >&2
             exit 1
           fi
-          cp "$OUT_DIR/.config" "$OUT_DIR/.config.control"
+          cp "$OUT_DIR/.config" "$OUT_DIR/.config.${{ inputs.variant }}"
 
       - name: Build ACK kernel Image
         run: |
@@ -141,7 +499,7 @@ jobs:
           export KBUILD_BUILD_VERSION=1
           make -C "$KERNEL_DIR" O="$OUT_DIR" -j"$(nproc)" Image
 
-      - name: Verify ACK control
+      - name: Verify ACK kernel
         run: |
           export OUT_DIR="$PWD/out"
           KERNEL_RELEASE="$(cat "$OUT_DIR/include/config/kernel.release")"
@@ -152,12 +510,17 @@ jobs:
           test "$KERNEL_RELEASE" = \
             "5.15.123-android13-8-00760-gf490405820f7"
           grep -a "Linux version $KERNEL_RELEASE" "$OUT_DIR/arch/arm64/boot/Image"
-          if [ "${{ inputs.variant }}" = ksun ]; then
+          if [ "${{ inputs.variant }}" = ksun ] || \
+             [ "${{ inputs.variant }}" = ksun-susfs ]; then
             grep -a -q 'KernelSU' "$OUT_DIR/arch/arm64/boot/Image"
           else
             test "$(grep -a -c 'KernelSU' "$OUT_DIR/arch/arm64/boot/Image" || true)" = 0
           fi
-          test "$(grep -a -c -E 'susfs|KSU_SUSFS' "$OUT_DIR/arch/arm64/boot/Image" || true)" = 0
+          if [ "${{ inputs.variant }}" = ksun-susfs ]; then
+            test "$(grep -a -c -i -E 'susfs|KSU_SUSFS' "$OUT_DIR/arch/arm64/boot/Image" || true)" -gt 0
+          else
+            test "$(grep -a -c -E 'susfs|KSU_SUSFS' "$OUT_DIR/arch/arm64/boot/Image" || true)" = 0
+          fi
 
           diff -u stock-config/stock_config_810.txt "$OUT_DIR/.config" \
             > "$OUT_DIR/config-vs-stock.diff" || true
@@ -170,13 +533,23 @@ jobs:
             echo "common_release=OnePlus 11 OOS14 .810 public ACK (5.15.123)"
             if [ "${{ inputs.variant }}" = ksun ]; then
               echo "ksun=v3.1.0@4855fa3a844579eca5171aae7f3805fd72729b56"
+              echo "susfs=none"
+            elif [ "${{ inputs.variant }}" = ksun-susfs ]; then
+              echo "ksun=v3.1.0-legacy-susfs@ba4422f0556e10f40dda1887631d87a18ede4ec5"
+              echo "susfs=gki-android13-5.15@ccb1918684b27644d17a6c842f57b60ae5966025"
             else
               echo "ksun=none"
+              echo "susfs=none"
             fi
-            echo "susfs=none"
             echo "uts_release=$KERNEL_RELEASE"
             echo "config_base=arch/arm64/configs/gki_defconfig"
-            echo "config_delta=TRIM_UNUSED_KSYMS=n; stock UTS compatibility"
+            if [ "${{ inputs.variant }}" = ksun-susfs ]; then
+              echo "config_delta=KSU=y; KSU_SUSFS=y; SUS_PATH/SUS_MAP/SUS_KSTAT/SUS_MOUNT/TRY_UMOUNT/OPEN_REDIRECT/SPOOF_UNAME/ENABLE_LOG/HIDE_KSU_SUSFS_SYMBOLS/SPOOF_CMDLINE_OR_BOOTCONFIG=y; TRIM_UNUSED_KSYMS=n; stock UTS compatibility"
+            elif [ "${{ inputs.variant }}" = ksun ]; then
+              echo "config_delta=KSU=y; TRIM_UNUSED_KSYMS=n; stock UTS compatibility"
+            else
+              echo "config_delta=TRIM_UNUSED_KSYMS=n; stock UTS compatibility"
+            fi
             echo "clang_version=$CLANG_VER"
             echo "image_size=$IMAGE_SIZE"
             echo "image_sha256=$IMAGE_SHA"
@@ -185,7 +558,7 @@ jobs:
             echo "run_url=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } | tee "$OUT_DIR/provenance.txt"
 
-      - name: Archive ACK control
+      - name: Archive ACK kernel
         uses: actions/upload-artifact@v4
         with:
           name: CPH2609-810-ACK-${{ inputs.variant }}
@@ -196,7 +569,7 @@ jobs:
           path: |
             out/arch/arm64/boot/Image
             out/.config
-            out/.config.control
+            out/.config.${{ inputs.variant }}
             out/System.map
             out/Module.symvers
             out/config-vs-stock.diff
@@ -204,7 +577,7 @@ jobs:
             out/include/config/kernel.release
             out/include/generated/utsrelease.h
 
-      - name: Archive ACK control vmlinux
+      - name: Archive ACK kernel vmlinux
         uses: actions/upload-artifact@v4
         with:
           name: CPH2609-810-ACK-${{ inputs.variant }}-vmlinux
