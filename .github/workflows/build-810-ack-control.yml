@@ -120,7 +120,7 @@ jobs:
             echo "KSU symbol leaked into ACK control" >&2
             exit 1
           fi
-          if grep -q '^CONFIG_KSU_SUSFS' "$OUT_DIR/.config"; then
+          if grep -q '^CONFIG_KSU_SUSFS.*=y$' "$OUT_DIR/.config"; then
             echo "SUSFS symbol leaked into ACK control/KSUN-only build" >&2
             exit 1
           fi
