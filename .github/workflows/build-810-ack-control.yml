@@ -166,3 +166,12 @@ jobs:
             out/provenance.txt
             out/include/config/kernel.release
             out/include/generated/utsrelease.h
+
+      - name: Archive ACK control vmlinux
+        uses: actions/upload-artifact@v4
+        with:
+          name: CPH2609-810-ACK-CONTROL-V1-vmlinux
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+          path: out/vmlinux
