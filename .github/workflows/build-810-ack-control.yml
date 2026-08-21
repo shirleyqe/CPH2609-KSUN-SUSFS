@@ -331,13 +331,13 @@ jobs:
               text,
               "+extern struct static_key_true ksu_su_compat_enabled;\n",
               "+extern bool ksu_su_compat_enabled;\n",
-              2,
+              1 if variant == "ksun-modern-susfs" else 2,
               "sucompat declaration")
           text = replace_exact(
               text,
               "+\tif (static_branch_likely(&ksu_su_compat_enabled))",
               "+\tif (ksu_su_compat_enabled)",
-              3,
+              2 if variant == "ksun-modern-susfs" else 3,
               "sucompat branch")
           if any(symbol in text for symbol in (
               "ksu_is_init_rc_hook_enabled",
