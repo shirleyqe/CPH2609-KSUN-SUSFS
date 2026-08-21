@@ -272,6 +272,17 @@ jobs:
                   finish = len(text)
               text = text[:begin] + text[finish:]
 
+          if variant == "ksun-modern-susfs":
+              path = "kernel/reboot.c"
+              start = f"diff --git a/{path} b/{path}\n"
+              if text.count(start) != 1:
+                  raise SystemExit(f"unexpected SUSFS {path} patch count")
+              begin = text.index(start)
+              finish = text.find("diff --git ", begin + len(start))
+              if finish < 0:
+                  finish = len(text)
+              text = text[:begin] + text[finish:]
+
           text = remove_between(
               text,
               "diff --git a/fs/Makefile b/fs/Makefile\n",

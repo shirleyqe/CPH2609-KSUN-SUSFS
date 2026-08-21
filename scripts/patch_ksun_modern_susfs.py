@@ -286,6 +286,38 @@ replace(
 
 replace(
     root / "selinux/selinux.c",
+    "u32 ksu_file_sid __read_mostly = 0;\n",
+    "u32 ksu_file_sid __read_mostly = 0;\n"
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "u32 susfs_ksu_sid __read_mostly;\n"
+    "u32 susfs_priv_app_sid __read_mostly;\n"
+    "#endif\n",
+    "SELinux SUSFS SID storage",
+)
+replace(
+    root / "selinux/selinux.c",
+    "    } else {\n"
+    '        pr_info("Cached su SID: %u\\n", cached_su_sid);\n'
+    "    }\n\n"
+    "    err = security_secctx_to_secid(ZYGOTE_CONTEXT, strlen(ZYGOTE_CONTEXT),",
+    "    } else {\n"
+    '        pr_info("Cached su SID: %u\\n", cached_su_sid);\n'
+    "    }\n"
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "    susfs_ksu_sid = cached_su_sid;\n"
+    "    err = security_secctx_to_secid(\n"
+    '        "u:r:priv_app:s0:c512,c768",\n'
+    '        strlen("u:r:priv_app:s0:c512,c768"), &susfs_priv_app_sid);\n'
+    "    if (err) {\n"
+    '        pr_warn("Failed to cache SUSFS priv_app SID: %d\\n", err);\n'
+    "        susfs_priv_app_sid = 0;\n"
+    "    }\n"
+    "#endif\n\n"
+    "    err = security_secctx_to_secid(ZYGOTE_CONTEXT, strlen(ZYGOTE_CONTEXT),",
+    "SELinux SUSFS SID initialization",
+)
+replace(
+    root / "selinux/selinux.c",
     "bool is_ksu_domain(void)\n"
     "{\n"
     "    return is_task_ksu_domain(current_cred());\n"
