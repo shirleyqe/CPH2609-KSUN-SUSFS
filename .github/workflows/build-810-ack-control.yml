@@ -12,6 +12,7 @@ on:
           - control
           - ksun
           - ksun-susfs
+          - ksun-modern-susfs
 
 jobs:
   kernel:
@@ -76,10 +77,11 @@ jobs:
           free -h
 
       - name: Integrate KernelSU Next
-        if: inputs.variant == 'ksun' || inputs.variant == 'ksun-susfs'
+        if: inputs.variant == 'ksun' || inputs.variant == 'ksun-susfs' || inputs.variant == 'ksun-modern-susfs'
         working-directory: kernel_platform/common
         run: |
-          if [ "${{ inputs.variant }}" = ksun ]; then
+          if [ "${{ inputs.variant }}" = ksun ] || \
+             [ "${{ inputs.variant }}" = ksun-modern-susfs ]; then
             curl --fail --location --silent --show-error \
               https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v3.1.0/kernel/setup.sh \
               | bash -s v3.1.0
@@ -93,6 +95,15 @@ jobs:
               ba4422f0556e10f40dda1887631d87a18ede4ec5
           fi
           test -d KernelSU-Next
+
+      - name: Add SUSFS glue to modern KernelSU-Next
+        if: inputs.variant == 'ksun-modern-susfs'
+        working-directory: kernel_platform/common
+        run: |
+          python3 ../../scripts/patch_ksun_modern_susfs.py KernelSU-Next/kernel
+          grep -q '^config KSU_SUSFS$' KernelSU-Next/kernel/Kconfig
+          grep -q 'susfs_init();' KernelSU-Next/kernel/ksu.c
+          grep -q 'CMD_SUSFS_SHOW_VERSION' KernelSU-Next/kernel/supercalls.c
 
       - name: Patch KernelSU-Next for legacy-susfs compatibility
         if: inputs.variant == 'ksun-susfs'
@@ -194,7 +205,7 @@ jobs:
           fi
 
       - name: Integrate SUSFS
-        if: inputs.variant == 'ksun-susfs'
+        if: inputs.variant == 'ksun-susfs' || inputs.variant == 'ksun-modern-susfs'
         run: |
           git clone --branch gki-android13-5.15 \
             https://github.com/ShirkNeko/susfs4ksu.git \
@@ -225,12 +236,13 @@ jobs:
           PY
           SUSFS_PATCH=kernel_platform/common/50_add_susfs_in_gki-android13-5.15.patch
           ADAPTED_PATCH="$RUNNER_TEMP/50_add_susfs_in_gki-android13-5.15-gki.patch"
-          python3 - "$SUSFS_PATCH" "$ADAPTED_PATCH" <<'PY'
+          python3 - "$SUSFS_PATCH" "$ADAPTED_PATCH" "${{ inputs.variant }}" <<'PY'
           from pathlib import Path
           import sys
 
           source = Path(sys.argv[1])
           destination = Path(sys.argv[2])
+          variant = sys.argv[3]
           text = source.read_text(encoding="utf-8")
 
           def remove_between(value, start, end, label):
@@ -265,6 +277,16 @@ jobs:
               "diff --git a/fs/Makefile b/fs/Makefile\n",
               "diff --git a/fs/exec.c b/fs/exec.c\n",
               "fs/Makefile")
+          if variant == "ksun-modern-susfs":
+              path = "fs/exec.c"
+              start = f"diff --git a/{path} b/{path}\n"
+              if text.count(start) != 1:
+                  raise SystemExit(f"unexpected SUSFS {path} patch count")
+              begin = text.index(start)
+              finish = text.find("diff --git ", begin + len(start))
+              if finish < 0:
+                  finish = len(text)
+              text = text[:begin] + text[finish:]
           text = remove_between(
               text,
               "@@ -74,6 +74,9 @@\n",
@@ -467,10 +489,12 @@ jobs:
             --set-str LOCALVERSION "-android13-8-00760-gf490405820f7" \
             --disable LOCALVERSION_AUTO
           if [ "${{ inputs.variant }}" = ksun ] || \
-             [ "${{ inputs.variant }}" = ksun-susfs ]; then
+             [ "${{ inputs.variant }}" = ksun-susfs ] || \
+             [ "${{ inputs.variant }}" = ksun-modern-susfs ]; then
             "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" --enable KSU
           fi
-          if [ "${{ inputs.variant }}" = ksun-susfs ]; then
+          if [ "${{ inputs.variant }}" = ksun-susfs ] || \
+             [ "${{ inputs.variant }}" = ksun-modern-susfs ]; then
             "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
               --enable KSU_SUSFS \
               --enable KSU_SUSFS_SUS_PATH \
@@ -496,13 +520,15 @@ jobs:
           grep -q '^CONFIG_LOCALVERSION="-android13-8-00760-gf490405820f7"$' \
             "$OUT_DIR/.config"
           if [ "${{ inputs.variant }}" = ksun ] || \
-             [ "${{ inputs.variant }}" = ksun-susfs ]; then
+             [ "${{ inputs.variant }}" = ksun-susfs ] || \
+             [ "${{ inputs.variant }}" = ksun-modern-susfs ]; then
             grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config"
           elif grep -q '^CONFIG_KSU' "$OUT_DIR/.config"; then
             echo "KSU symbol leaked into ACK control" >&2
             exit 1
           fi
-          if [ "${{ inputs.variant }}" = ksun-susfs ]; then
+          if [ "${{ inputs.variant }}" = ksun-susfs ] || \
+             [ "${{ inputs.variant }}" = ksun-modern-susfs ]; then
             grep -q '^CONFIG_KSU_SUSFS=y$' "$OUT_DIR/.config"
             grep -q '^CONFIG_KSU_SUSFS_SUS_PATH=y$' "$OUT_DIR/.config"
             grep -q '^CONFIG_KSU_SUSFS_SUS_MAP=y$' "$OUT_DIR/.config"
@@ -548,12 +574,14 @@ jobs:
             "5.15.123-android13-8-00760-gf490405820f7"
           grep -a "Linux version $KERNEL_RELEASE" "$OUT_DIR/arch/arm64/boot/Image"
           if [ "${{ inputs.variant }}" = ksun ] || \
-             [ "${{ inputs.variant }}" = ksun-susfs ]; then
+             [ "${{ inputs.variant }}" = ksun-susfs ] || \
+             [ "${{ inputs.variant }}" = ksun-modern-susfs ]; then
             grep -a -q 'KernelSU' "$OUT_DIR/arch/arm64/boot/Image"
           else
             test "$(grep -a -c 'KernelSU' "$OUT_DIR/arch/arm64/boot/Image" || true)" = 0
           fi
-          if [ "${{ inputs.variant }}" = ksun-susfs ]; then
+          if [ "${{ inputs.variant }}" = ksun-susfs ] || \
+             [ "${{ inputs.variant }}" = ksun-modern-susfs ]; then
             test "$(grep -a -c -i -E 'susfs|KSU_SUSFS' "$OUT_DIR/arch/arm64/boot/Image" || true)" -gt 0
           else
             test "$(grep -a -c -E 'susfs|KSU_SUSFS' "$OUT_DIR/arch/arm64/boot/Image" || true)" = 0
@@ -574,13 +602,17 @@ jobs:
             elif [ "${{ inputs.variant }}" = ksun-susfs ]; then
               echo "ksun=v3.1.0-legacy-susfs@ba4422f0556e10f40dda1887631d87a18ede4ec5"
               echo "susfs=gki-android13-5.15@ccb1918684b27644d17a6c842f57b60ae5966025"
+            elif [ "${{ inputs.variant }}" = ksun-modern-susfs ]; then
+              echo "ksun=v3.1.0@4855fa3a844579eca5171aae7f3805fd72729b56 + local minimal SUSFS glue"
+              echo "susfs=gki-android13-5.15@ccb1918684b27644d17a6c842f57b60ae5966025"
             else
               echo "ksun=none"
               echo "susfs=none"
             fi
             echo "uts_release=$KERNEL_RELEASE"
             echo "config_base=arch/arm64/configs/gki_defconfig"
-            if [ "${{ inputs.variant }}" = ksun-susfs ]; then
+            if [ "${{ inputs.variant }}" = ksun-susfs ] || \
+               [ "${{ inputs.variant }}" = ksun-modern-susfs ]; then
               echo "config_delta=KSU=y; KSU_SUSFS=y; SUS_PATH/SUS_MAP/SUS_KSTAT/SUS_MOUNT/TRY_UMOUNT/OPEN_REDIRECT/SPOOF_UNAME/ENABLE_LOG/HIDE_KSU_SUSFS_SYMBOLS/SPOOF_CMDLINE_OR_BOOTCONFIG=y; TRIM_UNUSED_KSYMS=n; stock UTS compatibility"
             elif [ "${{ inputs.variant }}" = ksun ]; then
               echo "config_delta=KSU=y; TRIM_UNUSED_KSYMS=n; stock UTS compatibility"
