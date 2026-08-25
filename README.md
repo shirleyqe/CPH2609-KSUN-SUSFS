@@ -1,50 +1,35 @@
 # CPH2609 KSUN + SUSFS
 
-Reproducible kernel build for OnePlus 12R (`CPH2609`) OxygenOS 14.
+Reproducible ACK kernel builds for the OnePlus 12R (`CPH2609`) OxygenOS 14 `.810(EX01)` baseline.
 
-Pinned inputs:
+## Pinned Inputs
 
-- OnePlus SM8550 Android 14 / OnePlus 12R kernel: `ce4627cedf3e4aac93ad0b369f623efa057707fe`
-- Matching OnePlus modules/device tree: `6ada53700a567e0b92cebebccb49b74db720f96a`
-- KernelSU Next SUSFS: `v3.1.0-legacy-susfs` (`ba4422f0556e10f40dda1887631d87a18ede4ec5`)
-- SUSFS: Android 13 GKI 5.15 (`ccb1918684b27644d17a6c842f57b60ae5966025`)
-- Public Android Clang: `r450784e` from `android14-release`
+- ACK common: `OnePlusOSS/android_kernel_common_oneplus_sm8550@4a62ecfd0ea4e2a3ffb932921133a6f499968574`
+- OPlus modules/device tree: `OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8550@6ada53700a567e0b92cebebccb49b74db720f96a`
+- KernelSU Next modern: `v3.1.0@4855fa3a844579eca5171aae7f3805fd72729b56`
+- KernelSU Next legacy: `v3.1.0-legacy-susfs@ba4422f0556e10f40dda1887631d87a18ede4ec5`
+- SUSFS: `gki-android13-5.15@ccb1918684b27644d17a6c842f57b60ae5966025`
+- Android Clang: `r450784e`
 
-OxygenOS 14 `.810` control status:
+The boot `Image` comes from the separate OnePlus ACK `common` tree, not the QCOM `msm-kernel` tree. `CONTROL-V2` proved the latter topology is not bootable on this baseline; `ACK-CONTROL-V1` proved the pinned ACK topology.
 
-- `CONTROL-V2` is confirmed not bootable. It incorrectly built the QCOM
-  `msm-kernel` tree as the boot kernel even though the production kalama build
-  is a mixed build whose boot `Image` comes from the separate ACK `common` tree.
-- `ACK-CONTROL-V1` pins the public OnePlus ACK 5.15.123 release commit
-  `4a62ecfd0ea4e2a3ffb932921133a6f499968574`. It contains the stock-required
-  `F2FS_APPBOOST` and `F2FS_FS_DEDUP` changes and is built without KSU/SUSFS.
-- ACK control artifacts must pass stock config and OEM module CRC audits before
-  they are eligible for a device boot test.
-- `ACK-CONTROL-V1` passed those gates and booted `.810` successfully on the
-  CPH2609. The same workflow now supports a `ksun` variant so KernelSU Next can
-  be isolated and tested before any SUSFS patch is added.
+## Workflow Variants
 
-Toolchain note: the stock `.831(EX01)` boot kernel was compiled with clang
-`r450784e` ("Android (8508608, based on r450784e)"). V3 pulls the matching
-public tarball from `android14-release` (`clang-r450784e.tar.gz`) and asserts
-the compiler self-string contains `r450784e`.
+`.github/workflows/build-810-ack-control.yml` supports:
 
-V3 build policy (stock fidelity + official QCOM fragment):
+- `control`: ACK without KernelSU or SUSFS
+- `ksun`: plain KernelSU Next `v3.1.0`
+- `ksun-susfs`: runtime-proven legacy branch
+- `ksun-modern-susfs`: runtime-proven plain `v3.1.0` with the narrow glue in `scripts/patch_ksun_modern_susfs.py`
 
-- Config base: `stock-config/stock_config.txt` — the OEM `.config` embedded
-  in the stock `.831(EX01)` boot kernel (IKCONFIG blob), extracted verbatim.
-- Fragment: `stock-config/kalama_GKI.config` — official OnePlus/QCOM kalama
-  GKI defconfig fragment, merged with strict Kconfig line rules:
-  - `#ifdef OPLUS_*` bodies kept (device feature macros assumed true)
-  - only `CONFIG_FOO=val` and `# CONFIG_FOO is not set` apply
-  - comment-lookalikes such as `# CONFIG_ZRAM=m` are ignored (not overrides)
-- Intentional delta only: `--enable KSU --enable KSU_SUSFS` and
-  `--disable TRIM_UNUSED_KSYMS` (stock whitelist is a vendor-machine path).
-- Full LTO is KEPT (stock profile).
-- Official fragment values restored vs V2 stock-only profile, including
-  `CONFIG_QCOM_SMEM=m`, `CONFIG_OPLUS_FEATURE_SENSOR_CFG=m`,
-  `CONFIG_OPLUS_FEATURE_OPROJECT=m`, `CONFIG_HORAE_THERMAL_SHELL=m`,
-  `CONFIG_OPLUS_CHG=m`, plus the QCOM UFS/PHY/SMEM chain.
+All flashable candidates must preserve stock UTS, full LTO, CFI, MODVERSIONS, `F2FS_APPBOOST`, and `F2FS_FS_DEDUP`. The only intentional stock config exception is disabling `TRIM_UNUSED_KSYMS`, because the OEM private whitelist is unavailable. OEM CRC and boot/AVB audits are mandatory before deployment.
 
-The workflow produces a kernel `Image`, not a flashable image. The final `boot.img`
-must retain the exact CPH2609 `.831(EX01)` stock boot header and ramdisk.
+## Golden Nodes
+
+- Legacy boot: `artifacts/final-810-ack-ksun-susfs/CPH2609_14.0.0.810_ACK_KSUN_SUSFS_boot.img`, SHA256 `84f26dc2b79e99d768199c1c2fb8e2133cc49922504c0da6a7048d460d9a70ed`
+- Modern boot: `artifacts/final-810-ack-ksun-modern-susfs/boot.img`, SHA256 `d67e607142c63010f730a407a1700e4ad40f016007f98abbff1f86cc797336d9`
+- Modern successful run: `32458402987`, project commit `dec8e32866fc729349762f684643a7356e032e40`
+
+The modern node passed the 751-module zero-mismatch CRC gate, boot v4/AVB audit, full device boot, 473 loaded modules, Root, Manager `v3.1.0 (33024)`, and SUSFS `v2.2.0` GKI supercall checks on `2026-08-24`.
+
+This device does not support `fastboot boot`. Always re-read the live slot, keep both legacy and stock rollback images, and write only the matching `boot_<slot>` partition after explicit confirmation.

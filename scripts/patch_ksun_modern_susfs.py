@@ -16,7 +16,14 @@ if len(sys.argv) != 2:
     raise SystemExit(f"usage: {Path(sys.argv[0]).name} <KernelSU-Next/kernel>")
 
 root = Path(sys.argv[1])
-required = ("Kconfig", "ksu.c", "setuid_hook.c", "supercalls.c", "selinux/selinux.c")
+required = (
+    "Kconfig",
+    "extras.c",
+    "ksu.c",
+    "setuid_hook.c",
+    "supercalls.c",
+    "selinux/selinux.c",
+)
 if not all((root / name).is_file() for name in required):
     raise SystemExit(f"not a KernelSU Next kernel directory: {root}")
 
@@ -112,6 +119,105 @@ replace(
 )
 
 replace(
+    root / "extras.c",
+    "#include <linux/version.h>\n",
+    "#include <linux/version.h>\n"
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "#include <linux/jump_label.h>\n"
+    "extern struct static_key_false susfs_is_avc_log_spoofing_enabled;\n"
+    "#endif\n",
+    "extras.c SUSFS AVC declaration",
+)
+replace(
+    root / "extras.c",
+    "static int avc_spoof_feature_get(u64 *value)\n"
+    "{\n"
+    "\t*value = ksu_avc_spoof_enabled ? 1 : 0;\n"
+    "\treturn 0;\n"
+    "}\n\n"
+    "static int avc_spoof_feature_set(u64 value)\n"
+    "{\n"
+    "\tbool enable = value != 0;\n\n"
+    "\tif (enable == ksu_avc_spoof_enabled) {\n"
+    '\t\tpr_info("avc_spoof: no need to change\\n");\n'
+    "\t\treturn 0;\n"
+    "\t}\n\n"
+    "\tksu_avc_spoof_enabled = enable;\n\n"
+    "\tif (boot_completed) {\n"
+    "\t\tif (enable) {\n"
+    "\t\t\tksu_avc_spoof_enable();\n"
+    "\t\t} else {\n"
+    "\t\t\tksu_avc_spoof_disable();\n"
+    "\t\t}\n"
+    "\t}\n\n"
+    '\tpr_info("avc_spoof: set to %d\\n", enable);\n\n'
+    "\treturn 0;\n"
+    "}\n",
+    "static int avc_spoof_feature_get(u64 *value)\n"
+    "{\n"
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "\t*value = static_branch_likely(\n"
+    "\t\t&susfs_is_avc_log_spoofing_enabled) ? 1 : 0;\n"
+    "#else\n"
+    "\t*value = ksu_avc_spoof_enabled ? 1 : 0;\n"
+    "#endif\n"
+    "\treturn 0;\n"
+    "}\n\n"
+    "static int avc_spoof_feature_set(u64 value)\n"
+    "{\n"
+    "\tbool enable = value != 0;\n"
+    "\tbool changed = enable != ksu_avc_spoof_enabled;\n\n"
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "\tbool susfs_enabled = static_branch_likely(\n"
+    "\t\t&susfs_is_avc_log_spoofing_enabled);\n\n"
+    "\tif (enable != susfs_enabled) {\n"
+    "\t\tif (enable)\n"
+    "\t\t\tstatic_branch_enable(\n"
+    "\t\t\t\t&susfs_is_avc_log_spoofing_enabled);\n"
+    "\t\telse\n"
+    "\t\t\tstatic_branch_disable(\n"
+    "\t\t\t\t&susfs_is_avc_log_spoofing_enabled);\n"
+    "\t}\n"
+    "#endif\n\n"
+    "\tksu_avc_spoof_enabled = enable;\n"
+    "\tif (changed && boot_completed) {\n"
+    "\t\tif (enable)\n"
+    "\t\t\tksu_avc_spoof_enable();\n"
+    "\t\telse\n"
+    "\t\t\tksu_avc_spoof_disable();\n"
+    "\t}\n\n"
+    '\tpr_info("avc_spoof: set KSU and SUSFS to %d\\n", enable);\n'
+    "\treturn 0;\n"
+    "}\n",
+    "extras.c SUSFS AVC feature bridge",
+)
+replace(
+    root / "extras.c",
+    "void ksu_avc_spoof_late_init()\n"
+    "{\n"
+    "\tboot_completed = true;\n"
+    "\t\n"
+    "    if (ksu_avc_spoof_enabled) {\n"
+    "\t\tksu_avc_spoof_enable();\n"
+    "\t}\n"
+    "}\n",
+    "void ksu_avc_spoof_late_init()\n"
+    "{\n"
+    "\tboot_completed = true;\n\n"
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "\tif (ksu_avc_spoof_enabled &&\n"
+    "\t    !static_branch_likely(\n"
+    "\t\t    &susfs_is_avc_log_spoofing_enabled))\n"
+    "\t\tstatic_branch_enable(\n"
+    "\t\t\t&susfs_is_avc_log_spoofing_enabled);\n"
+    "#endif\n\n"
+    "\tif (ksu_avc_spoof_enabled)\n"
+    "\t\tksu_avc_spoof_enable();\n"
+    "}\n",
+    "extras.c SUSFS AVC late initialization",
+)
+
+replace(
     root / "setuid_hook.c",
     '#include "kernel_umount.h"\n',
     '#include "kernel_umount.h"\n'
@@ -204,6 +310,31 @@ replace(
 )
 replace(
     root / "supercalls.c",
+    "bool susfs_is_boot_completed_triggered __read_mostly;\n"
+    "#endif\n",
+    "bool susfs_is_boot_completed_triggered __read_mostly;\n\n"
+    "static void ksu_susfs_set_avc_log_spoofing(void __user **user_info)\n"
+    "{\n"
+    "\tstruct st_susfs_avc_log_spoofing info = { 0 };\n\n"
+    "\tif (copy_from_user(&info,\n"
+    "\t\t\t   (struct st_susfs_avc_log_spoofing __user *)\n"
+    "\t\t\t\t   *user_info,\n"
+    "\t\t\t   sizeof(info))) {\n"
+    "\t\tinfo.err = -EFAULT;\n"
+    "\t} else {\n"
+    "\t\tinfo.err = ksu_set_feature(KSU_FEATURE_AVC_SPOOF,\n"
+    "\t\t\t\t\t info.enabled ? 1 : 0);\n"
+    "\t}\n\n"
+    "\tif (copy_to_user(\n"
+    "\t\t    (struct st_susfs_avc_log_spoofing __user *)*user_info,\n"
+    "\t\t    &info, sizeof(info)))\n"
+    "\t\tinfo.err = -EFAULT;\n"
+    "}\n"
+    "#endif\n",
+    "supercalls.c SUSFS AVC feature adapter",
+)
+replace(
+    root / "supercalls.c",
     "\t\t\ton_boot_completed();\n",
     "\t\t\ton_boot_completed();\n"
     "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
@@ -264,7 +395,7 @@ dispatcher = r'''
 		else
 #endif
 		if (cmd == CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING)
-			susfs_set_avc_log_spoofing(user_arg);
+			ksu_susfs_set_avc_log_spoofing(user_arg);
 		else if (cmd == CMD_SUSFS_SHOW_ENABLED_FEATURES)
 			susfs_get_enabled_features(user_arg);
 		else if (cmd == CMD_SUSFS_SHOW_VARIANT)
@@ -282,6 +413,17 @@ replace(
     "\tunsigned long reply = (unsigned long)arg4;\n" + dispatcher +
     "\n\t/* Check if this is a request to install KSU fd */",
     "supercalls.c SUSFS dispatcher",
+)
+replace(
+    root / "supercalls.c",
+    "\tstrscpy(cmd.tag, KERNEL_SU_VERSION_TAG, sizeof(cmd.tag));\n",
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    '\tstrscpy(cmd.tag, KERNEL_SU_VERSION_TAG "-modern-susfs",\n'
+    "\t\tsizeof(cmd.tag));\n"
+    "#else\n"
+    "\tstrscpy(cmd.tag, KERNEL_SU_VERSION_TAG, sizeof(cmd.tag));\n"
+    "#endif\n",
+    "supercalls.c modern SUSFS version tag",
 )
 
 replace(

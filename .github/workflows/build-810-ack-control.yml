@@ -104,6 +104,9 @@ jobs:
           grep -q '^config KSU_SUSFS$' KernelSU-Next/kernel/Kconfig
           grep -q 'susfs_init();' KernelSU-Next/kernel/ksu.c
           grep -q 'CMD_SUSFS_SHOW_VERSION' KernelSU-Next/kernel/supercalls.c
+          grep -q 'set KSU and SUSFS' KernelSU-Next/kernel/extras.c
+          grep -q 'KERNEL_SU_VERSION_TAG "-modern-susfs"' \
+            KernelSU-Next/kernel/supercalls.c
 
       - name: Patch KernelSU-Next for legacy-susfs compatibility
         if: inputs.variant == 'ksun-susfs'
