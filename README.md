@@ -7,6 +7,7 @@ Reproducible ACK kernel builds for the OnePlus 12R (`CPH2609`) OxygenOS 14 `.810
 - ACK common: `OnePlusOSS/android_kernel_common_oneplus_sm8550@4a62ecfd0ea4e2a3ffb932921133a6f499968574`
 - OPlus modules/device tree: `OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8550@6ada53700a567e0b92cebebccb49b74db720f96a`
 - KernelSU Next modern: `v3.1.0@4855fa3a844579eca5171aae7f3805fd72729b56`
+- KernelSU Next SELinux-hide control: `v3.3.0@3b18216f71df189ab3d1b1ce0bdb21be1268e771`
 - KernelSU Next legacy: `v3.1.0-legacy-susfs@ba4422f0556e10f40dda1887631d87a18ede4ec5`
 - SUSFS: `gki-android13-5.15@ccb1918684b27644d17a6c842f57b60ae5966025`
 - Android Clang: `r450784e`
@@ -21,6 +22,8 @@ The boot `Image` comes from the separate OnePlus ACK `common` tree, not the QCOM
 - `ksun`: plain KernelSU Next `v3.1.0`
 - `ksun-susfs`: runtime-proven legacy branch
 - `ksun-modern-susfs`: runtime-proven plain `v3.1.0` with the narrow glue in `scripts/patch_ksun_modern_susfs.py`
+- `ksun-v330-control`: build-only KernelSU Next `v3.3.0` control with Feature 4 `selinux_hide` and no SUSFS
+- `ksun-v330-modern-susfs`: preferred latest-stable KSUN route, combining native `v3.3.0` with the proven SUSFS `v2.2.0` kernel half through `scripts/patch_ksun_v330_modern_susfs.py`
 
 All flashable candidates must preserve stock UTS, full LTO, CFI, MODVERSIONS, `F2FS_APPBOOST`, and `F2FS_FS_DEDUP`. The only intentional stock config exception is disabling `TRIM_UNUSED_KSYMS`, because the OEM private whitelist is unavailable. OEM CRC and boot/AVB audits are mandatory before deployment.
 
@@ -32,5 +35,12 @@ All flashable candidates must preserve stock UTS, full LTO, CFI, MODVERSIONS, `F
 - Previous modern rollback: `artifacts/final-810-ack-ksun-modern-susfs/boot.img`, SHA256 `d67e607142c63010f730a407a1700e4ad40f016007f98abbff1f86cc797336d9`
 
 The Manager-visible modern node passed the 751-module zero-mismatch CRC gate, boot v4/AVB audit, full device boot, 473 loaded modules, Root, Manager `v3.1.0-modern-susfs (33024)`, SUSFS `v2.2.0` GKI supercalls, and bidirectional AVC Feature 10003/SUSFS CLI synchronization on `2026-08-25`.
+
+## Feature Boundaries
+
+- `avc_spoof` (Feature 10003) sanitizes SELinux contexts exposed through AVC denial/audit logs. The modern golden node synchronizes KSUN's implementation with the SUSFS `enable_avc_log_spoofing` command.
+- `selinux_hide` (Feature 4) is a separate Dirty SEPolicy mitigation. It answers selected selinuxfs and process-attribute checks from a boot-time backup policydb.
+- The pinned KSUN `v3.1.0` kernel, ksud, and Manager do not implement `selinux_hide`. The current modern and legacy golden nodes therefore prove AVC spoofing only, not SELinux-policy hiding.
+- KernelSU Next `v3.3.0@3b18216f71df189ab3d1b1ce0bdb21be1268e771` is the first stable KSUN release containing the upstream `selinux_hide` implementation and its `attr/current` fix. The new `ksun-v330-modern-susfs` route is the preferred candidate, but it remains build-unproven and must not replace or relabel the v3.1.0 golden nodes until all static and device gates pass.
 
 This device does not support `fastboot boot`. Always re-read the live slot, keep both legacy and stock rollback images, and write only the matching `boot_<slot>` partition after explicit confirmation.
