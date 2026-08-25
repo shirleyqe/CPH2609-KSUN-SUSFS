@@ -27,9 +27,10 @@ All flashable candidates must preserve stock UTS, full LTO, CFI, MODVERSIONS, `F
 ## Golden Nodes
 
 - Legacy boot: `artifacts/final-810-ack-ksun-susfs/CPH2609_14.0.0.810_ACK_KSUN_SUSFS_boot.img`, SHA256 `84f26dc2b79e99d768199c1c2fb8e2133cc49922504c0da6a7048d460d9a70ed`
-- Modern boot: `artifacts/final-810-ack-ksun-modern-susfs/boot.img`, SHA256 `d67e607142c63010f730a407a1700e4ad40f016007f98abbff1f86cc797336d9`
-- Modern successful run: `32458402987`, project commit `dec8e32866fc729349762f684643a7356e032e40`
+- Modern Manager-visible boot: `artifacts/final-810-ack-ksun-modern-susfs-manager-visible/boot.img`, SHA256 `76054f1b59b7900fe5133a8e8969bf1b843c9abcbb88b61d90e1b4381dbe09c6`
+- Modern Manager-visible run: `32800414603`, project commit `7526bb564bb3fe2b3c1986df50631f9e4a9d40a7`
+- Previous modern rollback: `artifacts/final-810-ack-ksun-modern-susfs/boot.img`, SHA256 `d67e607142c63010f730a407a1700e4ad40f016007f98abbff1f86cc797336d9`
 
-The modern node passed the 751-module zero-mismatch CRC gate, boot v4/AVB audit, full device boot, 473 loaded modules, Root, Manager `v3.1.0 (33024)`, and SUSFS `v2.2.0` GKI supercall checks on `2026-08-24`.
+The Manager-visible modern node passed the 751-module zero-mismatch CRC gate, boot v4/AVB audit, full device boot, 473 loaded modules, Root, Manager `v3.1.0-modern-susfs (33024)`, SUSFS `v2.2.0` GKI supercalls, and bidirectional AVC Feature 10003/SUSFS CLI synchronization on `2026-08-25`.
 
 This device does not support `fastboot boot`. Always re-read the live slot, keep both legacy and stock rollback images, and write only the matching `boot_<slot>` partition after explicit confirmation.
