@@ -661,6 +661,7 @@ jobs:
 
       - name: Verify ACK kernel
         run: |
+          set -x
           export OUT_DIR="$PWD/out"
           KERNEL_RELEASE="$(cat "$OUT_DIR/include/config/kernel.release")"
           IMAGE_SIZE="$(stat -c '%s' "$OUT_DIR/arch/arm64/boot/Image")"
@@ -751,6 +752,7 @@ jobs:
           } | tee "$OUT_DIR/provenance.txt"
 
       - name: Archive ACK kernel
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: CPH2609-810-ACK-${{ inputs.variant }}
@@ -770,6 +772,7 @@ jobs:
             out/include/generated/utsrelease.h
 
       - name: Archive ACK kernel vmlinux
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: CPH2609-810-ACK-${{ inputs.variant }}-vmlinux
