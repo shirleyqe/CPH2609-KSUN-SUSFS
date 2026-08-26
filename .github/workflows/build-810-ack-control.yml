@@ -373,20 +373,11 @@ jobs:
               raise SystemExit("unexpected SUSFS fs/stat.c statx hunk")
           stat_prefix = " \tint error;\n \n"
           if v330_modern:
-              stat_end = (
-                  "+orig_flow:\n"
-                  "+#endif\n"
-                  "+\n"
-              )
-              begin = text.index(stat_marker) + len(stat_prefix)
-              finish = text.index(stat_end, begin) + len(stat_end)
-              text = text[:begin] + text[finish:]
-              text = replace_exact(
+              text = remove_between(
                   text,
                   "@@ -206,6 +251,18 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
-                  "@@ -206,6 +251,6 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
-                  1,
-                  "fs/stat.c v3.3 statx hunk size")
+                  "@@ -223,7 +280,17 @@ static int vfs_statx(int dfd, const char __user *filename, int flags,\n",
+                  "fs/stat.c v3.3 statx hook")
           else:
               stat_declarations = "\n".join([
                   "+#ifdef CONFIG_KSU_SUSFS",
