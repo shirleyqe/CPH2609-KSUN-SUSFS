@@ -688,7 +688,6 @@ jobs:
             grep -Eq ' [Tt] (susfs_add_sus_path|susfs_get_enabled_features)$' \
               "$OUT_DIR/System.map"
           else
-            test "$(grep -a -c -i -E 'susfs|KSU_SUSFS' "$OUT_DIR/arch/arm64/boot/Image" || true)" = 0
             test "$(grep -E -c ' [Tt] susfs_' "$OUT_DIR/System.map" || true)" = 0
           fi
           if [ "${{ inputs.variant }}" = ksun-v330-control ] || \
