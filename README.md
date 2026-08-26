@@ -22,8 +22,8 @@ The boot `Image` comes from the separate OnePlus ACK `common` tree, not the QCOM
 - `ksun`: plain KernelSU Next `v3.1.0`
 - `ksun-susfs`: runtime-proven legacy branch
 - `ksun-modern-susfs`: runtime-proven plain `v3.1.0` with the narrow glue in `scripts/patch_ksun_modern_susfs.py`
-- `ksun-v330-control`: build-only KernelSU Next `v3.3.0` control with Feature 4 `selinux_hide` and no SUSFS
-- `ksun-v330-modern-susfs`: preferred latest-stable KSUN route, combining native `v3.3.0` with the proven SUSFS `v2.2.0` kernel half through `scripts/patch_ksun_v330_modern_susfs.py`
+- `ksun-v330-control`: build-proven KernelSU Next `v3.3.0` control with Feature 4 `selinux_hide` and no SUSFS
+- `ksun-v330-modern-susfs`: runtime-proven latest-stable KSUN route, combining native `v3.3.0` with the proven SUSFS `v2.2.0` kernel half through `scripts/patch_ksun_v330_modern_susfs.py`
 
 All flashable candidates must preserve stock UTS, full LTO, CFI, MODVERSIONS, `F2FS_APPBOOST`, and `F2FS_FS_DEDUP`. The only intentional stock config exception is disabling `TRIM_UNUSED_KSYMS`, because the OEM private whitelist is unavailable. OEM CRC and boot/AVB audits are mandatory before deployment.
 
@@ -33,14 +33,18 @@ All flashable candidates must preserve stock UTS, full LTO, CFI, MODVERSIONS, `F
 - Modern Manager-visible boot: `artifacts/final-810-ack-ksun-modern-susfs-manager-visible/boot.img`, SHA256 `76054f1b59b7900fe5133a8e8969bf1b843c9abcbb88b61d90e1b4381dbe09c6`
 - Modern Manager-visible run: `32800414603`, project commit `7526bb564bb3fe2b3c1986df50631f9e4a9d40a7`
 - Previous modern rollback: `artifacts/final-810-ack-ksun-modern-susfs/boot.img`, SHA256 `d67e607142c63010f730a407a1700e4ad40f016007f98abbff1f86cc797336d9`
+- v3.3 SELinux-hide boot: `artifacts/final-810-ack-ksun-v330-modern-susfs/boot.img`, SHA256 `1df1ba37acc5a72d2b8d3936f5271dfedc946f2e0356e7f01c4469ffb2650084`
+- v3.3 control run: `32919626207`; v3.3 Modern + SUSFS run: `32922903844`, project commit `8a8723149d99910c36074f6c11cf619daec6c499`
 
 The Manager-visible modern node passed the 751-module zero-mismatch CRC gate, boot v4/AVB audit, full device boot, 473 loaded modules, Root, Manager `v3.1.0-modern-susfs (33024)`, SUSFS `v2.2.0` GKI supercalls, and bidirectional AVC Feature 10003/SUSFS CLI synchronization on `2026-08-25`.
+
+The v3.3 node passed the same 751-module and 42,211-entry zero-mismatch CRC gate, boot v4/AVB audit, two complete device boots, 473 loaded modules, Root, SELinux Enforcing, Manager `v3.3.0-modern-susfs (33214-2)`, and SUSFS `v2.2.0` GKI supercalls on `2026-08-26`. Feature 4 was persisted across reboot; its first late enable correctly returned `EAGAIN`, while the same enable after reboot succeeded, proving that the boot-time policydb backup and native selinuxfs/`attr/current` hook initialization path completed.
 
 ## Feature Boundaries
 
 - `avc_spoof` (Feature 10003) sanitizes SELinux contexts exposed through AVC denial/audit logs. The modern golden node synchronizes KSUN's implementation with the SUSFS `enable_avc_log_spoofing` command.
 - `selinux_hide` (Feature 4) is a separate Dirty SEPolicy mitigation. It answers selected selinuxfs and process-attribute checks from a boot-time backup policydb.
 - The pinned KSUN `v3.1.0` kernel, ksud, and Manager do not implement `selinux_hide`. The current modern and legacy golden nodes therefore prove AVC spoofing only, not SELinux-policy hiding.
-- KernelSU Next `v3.3.0@3b18216f71df189ab3d1b1ce0bdb21be1268e771` is the first stable KSUN release containing the upstream `selinux_hide` implementation and its `attr/current` fix. The new `ksun-v330-modern-susfs` route is the preferred candidate, but it remains build-unproven and must not replace or relabel the v3.1.0 golden nodes until all static and device gates pass.
+- KernelSU Next `v3.3.0@3b18216f71df189ab3d1b1ce0bdb21be1268e771` is the first stable KSUN release containing the upstream `selinux_hide` implementation and its `attr/current` fix. The `ksun-v330-modern-susfs` route is now the preferred golden node; the v3.1.0 modern, legacy, and stock images remain independent rollback paths.
 
 This device does not support `fastboot boot`. Always re-read the live slot, keep both legacy and stock rollback images, and write only the matching `boot_<slot>` partition after explicit confirmation.
