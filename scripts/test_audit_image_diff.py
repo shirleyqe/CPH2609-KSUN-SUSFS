@@ -27,11 +27,11 @@ def run_audit(orig, patched, sysmap, kpimg=None):
 
 def build_mock_kernel_pair(workdir):
     # Create mock System.map
-    stext_addr = 0xFFFFFFC008010000
+    text_addr = 0xFFFFFFC008000000
     tcp_addr = 0xFFFFFFC00945FBDC
     sysmap_path = os.path.join(workdir, "System.map")
     with open(sysmap_path, "w") as f:
-        f.write(f"{stext_addr:016x} T _stext\n")
+        f.write(f"{text_addr:016x} T _text\n")
         f.write(f"{tcp_addr:016x} T tcp_init_sock\n")
 
     # Mock original Image of size 0x2000000 (32MB)
@@ -48,7 +48,7 @@ def build_mock_kernel_pair(workdir):
         f.seek(0x200000)
         f.write(b"Linux version 5.15.123-android13-8-00760-gf490405820f7 ")
         # Place PAC instructions at tcp_offset
-        tcp_offset = tcp_addr - stext_addr
+        tcp_offset = tcp_addr - text_addr
         f.seek(tcp_offset + 0x100)
         f.write(struct.pack("<I", 0xD50323BF))
         f.seek(tcp_offset + 0x110)
@@ -73,7 +73,7 @@ def build_mock_kernel_pair(workdir):
     struct.pack_into("<I", data, 4, branch_insn)
 
     # 2. Update PAC to NOP
-    tcp_offset = tcp_addr - stext_addr
+    tcp_offset = tcp_addr - text_addr
     struct.pack_into("<I", data, tcp_offset + 0x100, NOP)
     struct.pack_into("<I", data, tcp_offset + 0x110, NOP)
 
@@ -132,7 +132,7 @@ def main():
         corrupt_path = os.path.join(tmpdir, "bad_pac_patch")
         shutil.copyfile(patched, corrupt_path)
         with open(corrupt_path, "r+b") as f:
-            f.seek(0x144FBDC + 0x100)
+            f.seek(0x145FBDC + 0x100)
             f.write(struct.pack("<I", 0xD503201E)) # not NOP
         ok, out, _ = run_audit(orig, corrupt_path, sysmap, kpimg)
         assert not ok, "Failed to reject non-NOP in tcp_init_sock!"

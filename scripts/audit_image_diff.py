@@ -27,23 +27,26 @@ NOP = 0xD503201F
 KP_MAGIC = b"KP2026\x00\x00"
 
 
-def find_symbol_offset(system_map_path, symbol_name, stext_sym="_stext"):
-    stext_addr = None
+def find_symbol_offset(system_map_path, symbol_name, text_sym="_text"):
+    text_addr = None
     target_addr = None
     with open(system_map_path, "r", encoding="utf-8") as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) >= 3:
                 addr, _, name = parts[0], parts[1], parts[2]
-                if name == stext_sym and stext_addr is None:
-                    stext_addr = int(addr, 16)
+                if name == text_sym and text_addr is None:
+                    text_addr = int(addr, 16)
+                elif name == "_stext" and text_addr is None:
+                    # fallback if _text is absent
+                    text_addr = int(addr, 16)
                 if name == symbol_name and target_addr is None:
                     target_addr = int(addr, 16)
-    if stext_addr is None:
-        raise ValueError(f"Symbol '{stext_sym}' not found in System.map")
+    if text_addr is None:
+        raise ValueError(f"Symbol '{text_sym}' not found in System.map")
     if target_addr is None:
         raise ValueError(f"Symbol '{symbol_name}' not found in System.map")
-    return target_addr - stext_addr
+    return target_addr - text_addr
 
 
 def audit_image_diff(orig_path, patched_path, system_map_path, expected_kpimg_path=None):
