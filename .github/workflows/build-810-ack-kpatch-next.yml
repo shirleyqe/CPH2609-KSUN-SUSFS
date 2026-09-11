@@ -1,0 +1,151 @@
+name: Build KPatch-Next and Patch CPH2609 810 Golden Kernel
+
+on:
+  push:
+    branches:
+      - exp-810-ack-ksun-v330-kpatch-next
+  workflow_dispatch:
+
+jobs:
+  build-and-patch:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential cmake curl flex git libelf-dev libssl-dev python3 xz-utils zip zlib1g-dev
+
+      - name: Install ARM GNU Toolchain 12.2.rel1 (aarch64-none-elf)
+        run: |
+          TOOLCHAIN_URL="https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.2.rel1/binrel/arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf.tar.xz"
+          curl -sSL --retry 5 "$TOOLCHAIN_URL" -o arm-toolchain.tar.xz
+          echo "62d66e0ad7bd7f2a183d236ee301a5c73c737c886c7944aa4f39415aab528daf *arm-toolchain.tar.xz" | sha256sum --check -
+          tar -Jxf arm-toolchain.tar.xz
+          echo "$PWD/arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf/bin" >> $GITHUB_PATH
+
+      - name: Setup Android NDK r26b
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+          add-to-path: true
+
+      - name: Checkout KPatch-Next at pinned commit 456744b29efb9989445463ab29e368fa59a103c4
+        run: |
+          git clone --recursive https://github.com/KernelSU-Next/KPatch-Next.git kpatch-next
+          cd kpatch-next
+          git checkout 456744b29efb9989445463ab29e368fa59a103c4
+          test "$(git rev-parse HEAD)" = "456744b29efb9989445463ab29e368fa59a103c4"
+
+      - name: Build kpimg-linux and demo modules
+        working-directory: kpatch-next
+        run: |
+          export TARGET_COMPILE=aarch64-none-elf-
+          cd kernel
+          make
+          mv kpimg kpimg-linux
+          mv kpimg.elf kpimg.elf-linux
+          make clean
+          cd ..
+
+          cd kpms
+          cd demo-hello
+          make
+          mv hello.kpm demo-hello.kpm
+          cd ../..
+
+      - name: Build kptools-linux on x86_64 host
+        working-directory: kpatch-next
+        run: |
+          export TARGET_COMPILE=placeholder
+          cd kernel
+          make hdr
+          cd ..
+          cd tools
+          mkdir -p build && cd build
+          cmake ..
+          make
+          mv kptools kptools-linux
+          cd ../..
+
+      - name: Build Android CLI (kpatch-android)
+        working-directory: kpatch-next
+        run: |
+          cd user
+          mkdir -p build/android && cd build/android
+          cmake \
+            -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DANDROID_PLATFORM=android-33 \
+            -DANDROID_ABI=arm64-v8a ../..
+          cmake --build .
+          mv kpatch kpatch-android
+          cd ../../..
+
+      - name: Fetch and verify golden kernel baseline artifacts
+        run: |
+          # Verify exact golden baseline SHA256 hashes
+          IMAGE_SHA="95e944346efd50cb197b3b5887a26aa0e4f158c2167f45915176fcc94e78948e"
+          SYSMAP_SHA="4103d1f35f3c1ae4679cc52276580d271889b6fea162631b21c374ae9d6d2ba9"
+          CONFIG_SHA="a02bb731b923ae335fe09e145a9ff5beb39a62b58f4908f44d8c72216518d9e9"
+          echo "$IMAGE_SHA *golden_baseline/Image" | sha256sum --check -
+          echo "$SYSMAP_SHA *golden_baseline/System.map" | sha256sum --check -
+          echo "$CONFIG_SHA *golden_baseline/.config" | sha256sum --check -
+          echo "Golden kernel baseline verified."
+
+      - name: Patch Image with kptools
+        run: |
+          ./kpatch-next/tools/build/kptools-linux -p \
+            -i golden_baseline/Image \
+            -k kpatch-next/kernel/kpimg-linux \
+            -o Image.kpatch
+
+      - name: Run audit negative test suite
+        run: |
+          python3 scripts/test_audit_image_diff.py
+
+      - name: Run independent bounded Image diff audit
+        run: |
+          python3 scripts/audit_image_diff.py \
+            --orig golden_baseline/Image \
+            --patched Image.kpatch \
+            --sysmap golden_baseline/System.map \
+            --kpimg kpatch-next/kernel/kpimg-linux
+
+      - name: Package artifacts and record provenance
+        run: |
+          mkdir -p out_artifacts
+          cp Image.kpatch out_artifacts/Image
+          cp kpatch-next/kernel/kpimg-linux out_artifacts/kpimg-linux
+          cp kpatch-next/tools/build/kptools-linux out_artifacts/kptools-linux
+          cp kpatch-next/user/build/android/kpatch-android out_artifacts/kpatch
+          cp kpatch-next/kpms/demo-hello/demo-hello.kpm out_artifacts/demo-hello.kpm
+          cp golden_baseline/CPH2609-810-ACK-ksun-v330-modern-susfs/System.map out_artifacts/System.map
+          cp golden_baseline/CPH2609-810-ACK-ksun-v330-modern-susfs/.config out_artifacts/.config
+
+          cat << 'EOF' > out_artifacts/provenance.txt
+          variant=ACK_ksun-v330-modern-susfs-kpatch-next
+          device=CPH2609
+          firmware=CPH2609_14.0.0.810(EX01)
+          golden_run_id=32922903844
+          golden_image_sha256=95e944346efd50cb197b3b5887a26aa0e4f158c2167f45915176fcc94e78948e
+          golden_vmlinux_sha256=5bfa9da3066093e56130eaaaef79e501518338862e0bf5d99a166df3a1f599b7
+          kpatch_next_pin=456744b29efb9989445463ab29e368fa59a103c4
+          arm_toolchain=arm-gnu-toolchain-12.2.rel1-x86_64-aarch64-none-elf
+          android_ndk=r26b
+          bounded_image_diff=PASSED
+          EOF
+
+          sha256sum out_artifacts/* >> out_artifacts/verification.txt
+          cat out_artifacts/verification.txt
+
+      - name: Upload KPatch-Next patched kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CPH2609-810-ACK-ksun-v330-modern-susfs-kpatch-next
+          path: out_artifacts/
